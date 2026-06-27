@@ -46,7 +46,7 @@ must use the right one for the right job:
 |------|--------|-----------|------------|
 | **1 — health** | **VictoriaMetrics** (`timeseries_instant` / `timeseries_range`) | **~1 min** | the link-quality verdict: signal level + trend, retry / deauth / disassoc **rates**, throughput |
 | **2 — structure** | **evidence** (`show_device` `wifiSnapshots`) | discovery cadence (10 min–1 day) | what the client is connected to: serving AP, SSID, band, `connectedSince` — and a **liveness lower bound** (see below) |
-| **3 — residual** | **controller API** (`network_http`, UniFi only) | live | channel, noise/SNR, tx rate, `satisfaction` not in VM |
+| **3 — residual** | **controller API** (`network_http`, where the platform has one — e.g. UniFi) | live | a few fields not in VM (channel, noise/SNR, tx rate, vendor scores) |
 
 > **VM is the health source — ALWAYS, including when the device is offline. The
 > snapshot's frozen health values are not a fallback; they are a confusion trap.**
@@ -78,15 +78,18 @@ The interpretation reference is `interpreting-wifi-telemetry` — especially tha
 the UniFi "Experience"/`satisfaction` score is NOT link quality. Fetch it with
 the `get_reference_doc` MCP tool (`name: interpreting-wifi-telemetry`).
 
-## Which metrics exist depends on the platform — read the catalog reference
+## This skill is platform-neutral — read the catalog reference
 
-Different WiFi platforms emit different metric sets (UniFi reports per-client
-retries + SNR; the BGW320 reports per-client deauth/disassoc + per-radio error
-counters instead). **Do not hardcode this per vendor.** The platform-keyed map of
-**which metrics each platform emits, their type (counter/gauge), the PromQL to
-query each, and the health bands to score against** is the generated reference
+Sprinter's WiFi monitoring spans **many platforms** (UniFi, AT&T BGW320, OpenWrt,
+Luxul, Arris, … and growing), and they emit **different** metric sets — e.g.
+UniFi reports per-client retries + SNR, while the BGW320 reports per-client
+deauth/disassoc + per-radio error counters instead. **This skill works on any of
+them; never assume one vendor and never hardcode a vendor's metric names.** The
+authoritative, always-current list of **supported platforms** and **which metrics
+each emits** (type, health bands, PromQL) is the generated reference
 `wifi-metrics-reference` — fetch it with the `get_reference_doc` MCP tool
-(`name: wifi-metrics-reference`). The procedure below tells you when to fetch it.
+(`name: wifi-metrics-reference`); its "Supported platforms" roster is the source
+of truth for what Sprinter covers. The procedure below tells you when to fetch it.
 
 ## Procedure
 
@@ -300,10 +303,13 @@ sit good/fair is a **localized** problem (that device's placement/radio); a whol
 cluster in the fair/poor band is **network-wide** (coverage/congestion). The
 one-query sweep is what lets you tell those apart cheaply.
 
-## Controller-API residual (Tier 3, UniFi only — optional)
+## Controller-API residual (Tier 3 — optional, platform-dependent)
 
-For fields neither VM nor evidence carries (channel, noise/SNR if not in the
-platform's VM set, the `satisfaction` score), resolve the controller from the
+This tier is **optional and only applies where the platform exposes a queryable
+controller API (today: UniFi)**; on platforms without one, stay evidence+VM only —
+that is the normal path, not a failure. For fields neither VM nor evidence carries
+(channel, noise/SNR if not in the platform's VM set, a vendor score like UniFi's
+`satisfaction`), resolve the controller from the
 client's own evidence (`wifiSnapshots[].controllerDeviceId`; empty for
 cloud-managed/older snapshots → `find_device(device_class="wifi_controller")`),
 `show_device` it for its IP, and plain-GET it with `network_http`: a GET/HEAD

@@ -1,6 +1,6 @@
 {
   "name": "network-diagnostics",
-  "version": "2.7.713",
+  "version": "2.7.714",
   "description": "Network device identification and diagnostics using Sprinter MCP tools",
   "author": {
     "name": "Sprinter Tech",

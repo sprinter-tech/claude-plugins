@@ -74,8 +74,8 @@ or controller configuration.
 | `troubleshoot-device`      | Troubleshoot/identify a device by IP, MAC, or hostname. "What is this device?" / "diagnose connectivity for 10.0.14.1".                                                                                                                               |
 | `locate-device-uplink`     | Find which switch port a device attaches to and grade that wired link (speed, errors/discards), via switch MAC forwarding tables over SNMP. Generic (any device), vendor-independent. "Which switch port is 10.0.14.50 on?"                           |
 | `interface-metrics`        | Read per-interface traffic, speed, errors, discards, link state (and device CPU/memory/uptime) for an SNMP device from stored time-series metrics — real rates over a window, not a live counter read. "Is this uplink clean / saturated / flapping?" |
-| `diagnose-wifi-basic`      | Basic Wi-Fi link health check for one client on a UniFi-managed network (signal, retries, noise, rate, jitter). Hands off to roaming when the cause is a far-AP problem.                                                                              |
-| `diagnose-wifi-roaming`    | Sticky-client / roaming / mesh analysis from the UniFi controller API, including the min-RSSI safety checks.                                                                                                                                          |
+| `diagnose-wifi-basic`      | Basic Wi-Fi link health check for one client on any supported WiFi platform (signal, retries, noise, rate, jitter). Hands off to roaming when the cause is a far-AP problem.                                                                              |
+| `diagnose-wifi-roaming`    | Sticky-client / roaming / mesh analysis. The link-quality verdict runs on any platform; the deeper roaming/min-RSSI analysis is UniFi-controller-specific today.                                                                                          |
 | `network-assessment`       | Assess connection quality — speed, latency, jitter, and suitability for VoIP / gaming / streaming / video calls.                                                                                                                                      |
 | `network-issues-report`    | Report significant network issues over a time range (loss, latency spikes, mean/variance shifts, DHCP changes, rogue DHCP servers).                                                                                                                   |
 | `troubleshoot-printer`     | Check a network printer's status — toner/ink, jams, errors, supply levels, page counts.                                                                                                                                                               |
@@ -101,14 +101,22 @@ Or invoke a skill directly:
 
 ## Notes on Wi-Fi skills
 
-`diagnose-wifi-basic`, `diagnose-wifi-roaming`, and the Wi-Fi branch of
-`triage-network-complaint` currently support **UniFi-managed Wi-Fi only**
-(networks with a UniFi controller — UDM / UDM-Pro / Cloud Key). The data
-collection layer is UniFi-specific. The vendor-neutral *interpretation* guidance
-(the "Experience != link quality" trap, the min-RSSI failure modes, and the
-UniFi controller-API adapter) is fetched on demand from the Sprinter MCP server
-via the `get_reference_doc` tool — it is not shipped as files, so the MCP
-connection must be reachable for the skills to pull it.
+Sprinter's WiFi monitoring is **multi-platform** — UniFi, AT&T BGW320, OpenWrt,
+Luxul, Arris, and more, with new platforms added over time. The Wi-Fi skills are
+**vendor-neutral**: they read link facts from `show_device`
+`evidence.wifiSnapshots` (a vendor-neutral shape) and grade live metrics from
+VictoriaMetrics, adapting to whichever platform a device reports. The
+authoritative, always-current list of **supported platforms** and the **metric
+each emits** is the `wifi-metrics-reference` doc (its "Supported platforms"
+roster), fetched at runtime via the `get_reference_doc` MCP tool.
+
+One part is genuinely platform-specific: `diagnose-wifi-roaming`'s deeper
+**roaming / mesh / min-RSSI** analysis needs a **UniFi controller** (UDM /
+UDM-Pro / Cloud Key) and degrades gracefully on other platforms — the
+platform-neutral link-quality verdict still runs everywhere. Vendor-neutral
+*interpretation* guidance (the "Experience != link quality" trap, the min-RSSI
+failure modes) is likewise fetched on demand via `get_reference_doc`, so the MCP
+connection must be reachable for the skills to pull their reference material.
 
 ## Building & publishing
 

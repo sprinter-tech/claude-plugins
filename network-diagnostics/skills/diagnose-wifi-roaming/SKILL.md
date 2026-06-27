@@ -1,12 +1,14 @@
 ---
 name: diagnose-wifi-roaming
 description: >
-  Diagnose a Wi-Fi client's link quality and sticky-client / roaming problems
-  on a UniFi-managed network, read-only, from Sprinter's stored WiFi evidence
-  (with a narrow live controller-API fallback). Use when a device has a
-  weak/jittery/retry-heavy wireless link, is "stuck" on a far access point, or
-  when someone asks why a client won't roam to a closer AP, or when UniFi
-  reports a healthy "Experience" rating that contradicts observed
+  Diagnose a Wi-Fi client's link quality and sticky-client / roaming problems,
+  read-only, from Sprinter's stored WiFi evidence (with a narrow live
+  controller-API fallback). The link-quality verdict works on any supported WiFi
+  platform; the deeper roaming/mesh/min-RSSI analysis is UniFi-controller-specific
+  today and degrades gracefully on other platforms. Use when a device has a
+  weak/jittery/retry-heavy wireless link, is "stuck" on a far access point, when
+  someone asks why a client won't roam to a closer AP, or when a controller
+  reports a healthy "Experience"/satisfaction rating that contradicts observed
   retries/latency. Read-only: it never changes controller or device config —
   it explains what is happening and what the fix would be. The narrow
   roaming/mesh follow-up to diagnose-wifi-basic; often reached from
@@ -25,7 +27,7 @@ allowed-tools: >
   mcp__sprinter__network_ping
 ---
 
-# Diagnose Wi-Fi Roaming / Sticky-Client Problems (UniFi, read-only)
+# Diagnose Wi-Fi Roaming / Sticky-Client Problems (read-only)
 
 > **Output discipline.** Investigate quietly. Do NOT narrate your process to the
 > user — no "let me…", no "now I'll…", no announcing which tools you are loading
@@ -34,8 +36,10 @@ allowed-tools: >
 > supporting evidence, and the verdict/next step. Keep any interim text minimal.
 
 This skill investigates why a Wi-Fi client has a poor link or won't roam to a
-nearer access point, on a network managed by a **UniFi controller** (UDM /
-UDM-Pro / Cloud Key). Three data sources, each for a different job:
+nearer access point. The platform-neutral link-quality verdict runs on **any**
+supported WiFi platform; the deeper roaming/mesh/min-RSSI analysis is **UniFi
+controller**-specific today (UDM / UDM-Pro / Cloud Key) — see Scope below for how
+the skill branches by platform. Three data sources, each for a different job:
 
 - **The client's live link quality (signal, retry rate, trend) comes from
   VictoriaMetrics** via `timeseries_instant` / `timeseries_range` — ~1-min fresh,
