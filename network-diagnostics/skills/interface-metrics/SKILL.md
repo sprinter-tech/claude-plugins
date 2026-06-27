@@ -53,10 +53,6 @@ and fetch the wifi-metrics reference via the `get_reference_doc` MCP tool
 (`name: wifi-metrics-reference`). When you are reached to grade an **AP**, you
 grade its wired uplink port; the wireless side is the WiFi skill's.
 
-> **Reference docs are fetched only via the `get_reference_doc` MCP tool.** Never
-> read a `docs/` path directly — those paths do not exist in Claude Desktop or
-> ChatGPT. The doc name is the filename stem, e.g. `wifi-metrics-reference`.
-
 ## MCP Server Availability — Check First
 
 If any `mcp__sprinter__*` call fails with a connection / auth / "server

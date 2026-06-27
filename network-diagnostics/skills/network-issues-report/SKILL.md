@@ -35,10 +35,6 @@ it via the `get_reference_doc` MCP tool (`name: wifi-metrics-reference`). (Note:
 the `snr` / `signal` semantics in the DOCSIS section below are cable-plant MER,
 **not** 802.11.)
 
-> **Reference docs are fetched only via the `get_reference_doc` MCP tool.** Never
-> read a `docs/` path directly — those paths do not exist in Claude Desktop or
-> ChatGPT. The doc name is the filename stem, e.g. `wifi-metrics-reference`.
-
 ## MCP Server Availability — Check First
 
 Before starting, verify that the Sprinter MCP tools (`mcp__sprinter__*`) are

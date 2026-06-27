@@ -318,10 +318,6 @@ This is a read-only correlation step on tools you already have — no new data
 source. The full recipe is in the `when-did-this-start` reference (fetch via the
 `get_reference_doc` MCP tool, `name: when-did-this-start`); the short form:
 
-> **Reference docs are fetched only via the `get_reference_doc` MCP tool.** Never
-> read a `docs/` path directly — those paths do not exist in Claude Desktop or
-> ChatGPT. The doc name is the filename stem, e.g. `wifi-metrics-reference`.
-
 1. **Pin the onset `T`.** `device_presence_history` on the subject `device_id`
    over a generous window — the first `online -> offline` flap or the first
    clustered `roamed`/`disassociated` is the onset (a steady `online -> sleep ->

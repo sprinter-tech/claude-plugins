@@ -70,13 +70,7 @@ must use the right one for the right job:
 
 The interpretation reference is `interpreting-wifi-telemetry` — especially that
 the UniFi "Experience"/`satisfaction` score is NOT link quality. Fetch it with
-the `get_reference_doc` MCP tool (`name: interpreting-wifi-telemetry`); never
-read a `docs/` path directly — those paths do not exist in Claude Desktop or
-ChatGPT.
-
-> **Reference docs are fetched only via the `get_reference_doc` MCP tool.** Never
-> read a `docs/` path directly — those paths do not exist in Claude Desktop or
-> ChatGPT. The doc name is the filename stem, e.g. `wifi-metrics-reference`.
+the `get_reference_doc` MCP tool (`name: interpreting-wifi-telemetry`).
 
 ## Which metrics exist depends on the platform — read the catalog reference
 

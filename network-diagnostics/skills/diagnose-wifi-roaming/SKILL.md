@@ -31,10 +31,6 @@ This skill investigates why a Wi-Fi client has a poor link or won't roam to a
 nearer access point, on a network managed by a **UniFi controller** (UDM /
 UDM-Pro / Cloud Key). Three data sources, each for a different job:
 
-> **Reference docs are fetched only via the `get_reference_doc` MCP tool.** Never
-> read a `docs/` path directly — those paths do not exist in Claude Desktop or
-> ChatGPT. The doc name is the filename stem, e.g. `wifi-metrics-reference`.
-
 - **The client's live link quality (signal, retry rate, trend) comes from
   VictoriaMetrics** via `timeseries_instant` / `timeseries_range` — ~1-min fresh,
   queried by `device_id`. This is the **primary** source for "is the link bad
@@ -85,8 +81,7 @@ The stored `wifiSnapshots` evidence shape is vendor-neutral; only the residual
 layer is UniFi-bound. The vendor-neutral *analysis* (the
 Experience-vs-link-quality trap and the two min-RSSI failure modes) lives in
 the reference `interpreting-wifi-telemetry` — fetch it with the
-`get_reference_doc` MCP tool (`name: interpreting-wifi-telemetry`); never read a
-`docs/` path directly — those paths do not exist in Claude Desktop or ChatGPT.
+`get_reference_doc` MCP tool (`name: interpreting-wifi-telemetry`).
 The platform keys themselves are enumerated in `wifi-metrics-reference` (step 1);
 the planned path to a richer multi-vendor roaming analysis is
 `diagnose-wifi-roaming-generalization-todo` — fetch it with the

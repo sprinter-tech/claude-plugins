@@ -98,10 +98,6 @@ suspect:
   overview lacks `wifiSnapshots` (older server), retry with
   `sections="discovery"`.
 
-> **Reference docs are fetched only via the `get_reference_doc` MCP tool.** Never
-> read a `docs/` path directly — those paths do not exist in Claude Desktop or
-> ChatGPT. The doc name is the filename stem, e.g. `wifi-metrics-reference`.
-
 ## Step 3 — Localize to a layer
 
 From the above, decide where the problem lives:

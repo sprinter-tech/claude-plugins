@@ -49,10 +49,6 @@ Background reference (ships with this plugin): call the `get_reference_doc` MCP 
 `name: snmp-topology-discovery-skill-design` — the full methodology, worked example, and OID
 reference.
 
-> **Reference docs are fetched only via the `get_reference_doc` MCP tool.** Never
-> read a `docs/` path directly — those paths do not exist in Claude Desktop or
-> ChatGPT. The doc name is the filename stem, e.g. `wifi-metrics-reference`.
-
 ## MCP Server Availability — Check First
 
 Before starting, verify the Sprinter MCP tools (`mcp__sprinter__*`) are

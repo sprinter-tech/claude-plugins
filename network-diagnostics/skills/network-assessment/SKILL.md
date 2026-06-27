@@ -133,10 +133,6 @@ doc fetched via the `get_reference_doc` MCP tool (`name: wifi-metrics-reference`
 assessment here can still be a useful *companion* (a clean WAN with a bad per-client Wi-Fi link
 localizes the problem to the air), but the Wi-Fi verdict itself belongs to those skills.
 
-> **Reference docs are fetched only via the `get_reference_doc` MCP tool.** Never
-> read a `docs/` path directly — those paths do not exist in Claude Desktop or
-> ChatGPT. The doc name is the filename stem, e.g. `wifi-metrics-reference`.
-
 ## Step 4: Present Assessment
 
 Structure your assessment around what the user cares about:
