@@ -32,6 +32,12 @@ allowed-tools: >
   mcp__sprinter__ask_user
 ---
 
+> **Output discipline.** Investigate quietly. Do NOT narrate your process to the
+> user — no "let me…", no "now I'll…", no announcing which tools you are loading
+> or calling, no step-by-step play-by-play. Call tools without describing the act
+> of calling them. Surface only what matters to the user: the findings, the
+> supporting evidence, and the verdict/next step. Keep any interim text minimal.
+
 Generate a printer report for $ARGUMENTS
 
 ## MCP Server Availability — Check First

@@ -23,6 +23,12 @@ allowed-tools: >
 
 # Basic Wi-Fi Link Health Check (read-only)
 
+> **Output discipline.** Investigate quietly. Do NOT narrate your process to the
+> user — no "let me…", no "now I'll…", no announcing which tools you are loading
+> or calling, no step-by-step play-by-play. Call tools without describing the act
+> of calling them. Surface only what matters to the user: the findings, the
+> supporting evidence, and the verdict/next step. Keep any interim text minimal.
+
 A general "is this wireless link OK, and if not why" check for a single client.
 This is the **broad** Wi-Fi skill; `diagnose-wifi-roaming` is the **narrow**
 roaming/mesh follow-up. Often invoked from `triage-network-complaint` once a
