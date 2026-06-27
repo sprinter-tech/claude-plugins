@@ -25,9 +25,11 @@ allowed-tools: >
 
 > **Output discipline.** Investigate quietly. Do NOT narrate your process to the
 > user — no "let me…", no "now I'll…", no announcing which tools you are loading
-> or calling, no step-by-step play-by-play. Call tools without describing the act
-> of calling them. Surface only what matters to the user: the findings, the
-> supporting evidence, and the verdict/next step. Keep any interim text minimal.
+> or calling, no step-by-step play-by-play, and no explaining your reasoning or
+> the platform/coverage landscape (e.g. "since this is a UniFi device…", "Sprinter
+> supports several platforms…"). Call tools without describing the act of calling
+> them. Surface only what matters to the user: the findings, the supporting
+> evidence, and the verdict/next step. Keep any interim text minimal.
 
 A general "is this wireless link OK, and if not why" check for a single client.
 This is the **broad** Wi-Fi skill; `diagnose-wifi-roaming` is the **narrow**
@@ -78,18 +80,13 @@ The interpretation reference is `interpreting-wifi-telemetry` — especially tha
 the UniFi "Experience"/`satisfaction` score is NOT link quality. Fetch it with
 the `get_reference_doc` MCP tool (`name: interpreting-wifi-telemetry`).
 
-## This skill is platform-neutral — read the catalog reference
+## Platform-neutral — read the catalog reference
 
-Sprinter's WiFi monitoring spans **many platforms** (UniFi, AT&T BGW320, OpenWrt,
-Luxul, Arris, … and growing), and they emit **different** metric sets — e.g.
-UniFi reports per-client retries + SNR, while the BGW320 reports per-client
-deauth/disassoc + per-radio error counters instead. **This skill works on any of
-them; never assume one vendor and never hardcode a vendor's metric names.** The
-authoritative, always-current list of **supported platforms** and **which metrics
-each emits** (type, health bands, PromQL) is the generated reference
-`wifi-metrics-reference` — fetch it with the `get_reference_doc` MCP tool
-(`name: wifi-metrics-reference`); its "Supported platforms" roster is the source
-of truth for what Sprinter covers. The procedure below tells you when to fetch it.
+Platforms differ in which metrics they emit, so never assume one vendor or
+hardcode a vendor's metric names. Fetch `wifi-metrics-reference` (via
+`get_reference_doc`), read the section for this device's platform, and use only
+those metrics. This is internal lookup — do not explain platform coverage to the
+user. The procedure below says when to fetch it.
 
 ## Procedure
 

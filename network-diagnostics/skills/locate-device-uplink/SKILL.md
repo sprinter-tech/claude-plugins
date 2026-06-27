@@ -30,9 +30,11 @@ Locate the wired uplink for $ARGUMENTS
 
 > **Output discipline.** Investigate quietly. Do NOT narrate your process to the
 > user — no "let me…", no "now I'll…", no announcing which tools you are loading
-> or calling, no step-by-step play-by-play. Call tools without describing the act
-> of calling them. Surface only what matters to the user: the findings, the
-> supporting evidence, and the verdict/next step. Keep any interim text minimal.
+> or calling, no step-by-step play-by-play, and no explaining your reasoning or
+> the platform/coverage landscape (e.g. "since this is a UniFi device…", "Sprinter
+> supports several platforms…"). Call tools without describing the act of calling
+> them. Surface only what matters to the user: the findings, the supporting
+> evidence, and the verdict/next step. Keep any interim text minimal.
 
 ## What this skill does
 
