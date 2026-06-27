@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sprinter": {
+      "type": "http",
+      "url": "https://prod-us-west-1.sprinter-tech.net/mcp/jsonrpc"
+    }
+  }
+}

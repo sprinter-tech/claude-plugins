@@ -1,0 +1,15 @@
+{
+  "name": "sprinter",
+  "owner": {
+    "name": "Sprinter Tech",
+    "url": "https://github.com/sprinter-tech"
+  },
+  "plugins": [
+    {
+      "name": "network-diagnostics",
+      "source": "./network-diagnostics",
+      "version": "2.7.711",
+      "description": "Network device identification and diagnostics using Sprinter MCP tools"
+    }
+  ]
+}

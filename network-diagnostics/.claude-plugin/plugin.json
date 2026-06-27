@@ -1,0 +1,20 @@
+{
+  "name": "network-diagnostics",
+  "version": "2.7.711",
+  "description": "Network device identification and diagnostics using Sprinter MCP tools",
+  "author": {
+    "name": "Sprinter Tech",
+    "url": "https://github.com/sprinter-tech"
+  },
+  "repository": "https://github.com/sprinter-tech/claude-plugins",
+  "license": "Apache-2.0",
+  "keywords": [
+    "network",
+    "device",
+    "identification",
+    "diagnostics",
+    "troubleshoot",
+    "debug",
+    "sprinter"
+  ]
+}
