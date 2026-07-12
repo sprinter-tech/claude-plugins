@@ -10,6 +10,7 @@ argument-hint: "[network-name] [time-range]"
 allowed-tools: >
   Bash, Read, Write, Grep, Glob, WebSearch,
   mcp__sprinter__list_networks,
+  mcp__sprinter__find_network,
   mcp__sprinter__show_network,
   mcp__sprinter__network_issues,
   mcp__sprinter__show_probes,
@@ -67,14 +68,21 @@ never save MCP tool output to files or pipe it through Python/jq scripts.
 If the user provided a network name or ID (via $ARGUMENTS or earlier in the
 conversation), use it. Otherwise:
 
-1. **`list_networks`** — show available networks.
-2. **`ask_user`** — if multiple networks exist, ask the user which one.
-   Format choices clearly:
+1. If a network name was given, call **`find_network`** (name prefix, across all
+   your orgs) to resolve it directly.
+2. Otherwise call **`list_networks`** — it spans all your organizations (orgs) and
+   each row carries `tenant_id` + `tenant_name`.
+3. **`ask_user`** — if multiple networks exist (or a name matches networks in
+   more than one org), ask the user which one, showing the **org** when you belong
+   to more than one:
    > Which network would you like the issues report for?
-   > 1. **home** — 10.0.14.0/24 (46 devices)
-   > 2. **vlad** — 192.168.10.0/24 (23 devices)
+   > **Lincoln SD**
+   >   1. **SD office network** — 10.0.0.0/24 (12 devices)
+   > **Jefferson SD**
+   >   2. **SD office network** — 10.0.1.0/24 (9 devices)
 
-   Omit networks with zero devices unless the user explicitly asks.
+   Omit networks with zero devices unless the user explicitly asks. When you
+   belong to only one org, the org grouping is unnecessary.
 
 Once you have a `network_id`, proceed to Step 2.
 

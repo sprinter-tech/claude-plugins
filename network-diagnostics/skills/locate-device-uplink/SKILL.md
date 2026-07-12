@@ -53,6 +53,15 @@ a printer, or a laptop are all located the same way. It is also
 managed switch, which makes it the antidote to a Wi-Fi controller (or any other
 system) that is blind to third-party switches and mis-reports topology.
 
+Sprinter now **persists** wired attachments automatically: a background topology
+service resolves each device's switch/port from the same FDB/LLDP evidence and
+stores it as a graph edge (`show_device` may surface an "attached to" fact). This
+skill remains the **live, independent verifier and explainer** — it re-reads the
+switch FDB at question time to confirm (or contradict) the recorded attachment,
+grade the link's health (speed, errors, discards), and show the specific FDB/LLDP
+entries behind the answer. Use it when the persisted attachment is stale, missing,
+disputed, or when the user wants the evidence, not just the conclusion.
+
 Background reference (ships with this plugin): call the `get_reference_doc` MCP tool with
 `name: snmp-topology-discovery-skill-design` — the full methodology, worked example, and OID
 reference.
@@ -263,3 +272,13 @@ name the ambiguity and the next probe that would resolve it.
   signal/SNR/retries, the radio health) is graded separately by the caller via
   `diagnose-wifi-basic` / `diagnose-wifi-roaming` against the WiFi catalog bands
   (via `get_reference_doc`, `name: wifi-metrics-reference`); this skill emits no Wi-Fi metric.
+
+## Seeing the whole picture in the UI
+
+The same attachment data this skill computes over SNMP is also rendered
+network-wide in the Sprinter web UI under a network's **Topology** tab: an
+interactive graph of devices, their switch/AP attachments, and the gateway→ISP
+uplink, with each device colored by presence. When a user wants to *see* where a
+device sits in the fabric (rather than get a single port verdict), point them
+there; this skill remains the tool for a precise, evidence-backed single-device
+port location and link grade.

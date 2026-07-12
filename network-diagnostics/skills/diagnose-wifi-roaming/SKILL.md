@@ -17,6 +17,7 @@ argument-hint: "[device-address-or-id]"
 allowed-tools: >
   Bash, Read, Write, Edit, Grep, Glob, Skill, WebSearch,
   mcp__sprinter__get_reference_doc,
+  mcp__sprinter__network_tech_stack,
   mcp__sprinter__show_device,
   mcp__sprinter__find_device,
   mcp__sprinter__device_presence_history,
@@ -72,6 +73,14 @@ But the **Step 1b live link-quality verdict** (signal + retry/error rate,
 read from VM, scored against the catalog bands) is platform-neutral and is
 worth running on **any** platform — so do NOT STOP outright on a non-UniFi
 client.
+
+Before branching, call `network_tech_stack` and read this network's WiFi
+platform note. Roaming/mesh analysis only makes sense on a platform that runs a
+**multi-AP fleet and reports per-client association/roaming data** — the note
+tells you upfront whether that is the case, plus how many controllers/APs exist.
+On a platform that structurally withholds a client roster or per-client health
+(e.g. Google Wifi), the roaming-specific analysis is impossible by construction:
+say so and skip it, rather than discovering the gap probe by probe.
 
 Branch on the platform key (from Step 1a's `wifiSnapshots[].source`, `wifi_`
 stripped):

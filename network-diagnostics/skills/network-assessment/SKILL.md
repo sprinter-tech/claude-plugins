@@ -10,8 +10,10 @@ argument-hint: "[network-id]"
 allowed-tools: >
   Bash, Read, Grep, Glob, Skill, WebSearch,
   mcp__sprinter__show_network,
+  mcp__sprinter__network_tech_stack,
   mcp__sprinter__show_agent,
   mcp__sprinter__list_networks,
+  mcp__sprinter__find_network,
   mcp__sprinter__show_probes,
   mcp__sprinter__network_issues,
   mcp__sprinter__network_benchmarks,
@@ -58,14 +60,25 @@ never save MCP tool output to files or pipe it through Python/jq scripts.
 
 If the user provided a `network_id`, use it directly. Otherwise:
 
-1. **`list_networks`** — show available networks.
-2. **`ask_user`** — if multiple networks exist, ask the user which one.
+1. If a network name was given, call **`find_network`** (name prefix, across all
+   your orgs) to resolve it directly. Otherwise call **`list_networks`** — it
+   spans all your organizations (orgs) and each row carries `tenant_id` +
+   `tenant_name`.
+2. **`ask_user`** — if multiple networks exist (or a name matches networks in
+   more than one org), ask the user which one, showing the **org** alongside the
+   network when you belong to more than one org.
 
 Once you have a `network_id`:
 
 3. **`show_network`** — get network details, ISP info, and the list of
    agents (names and IDs). This tells you what agents are online and gives
    you the network's timezone.
+4. **`network_tech_stack`** — the technology-stack summary: ISP + connection
+   technology (cable/fiber/cellular), the gateway, infrastructure, and the WiFi
+   platform inventory, each device with its `device_id` and IP. Grounds the
+   assessment in what hardware is actually in play and, via the per-platform
+   notes, what each platform can and cannot report — so you frame a capability
+   gap as a platform limit, not a network deficiency.
 
 ## Step 2: Gather Performance Data
 

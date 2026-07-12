@@ -13,6 +13,7 @@ argument-hint: "[device-address-or-id]"
 allowed-tools: >
   Bash, Read, Skill,
   mcp__sprinter__get_reference_doc,
+  mcp__sprinter__network_tech_stack,
   mcp__sprinter__show_device,
   mcp__sprinter__find_device,
   mcp__sprinter__timeseries_instant,
@@ -98,6 +99,14 @@ the **structural** facts only: `anchorDeviceId` (serving AP, name-resolved),
 **`device_id`** (you query VM by it) and the snapshot's **`source`** (it is
 `"wifi_<platform>"` — strip `wifi_` to get the platform key).
 
+Once you have the platform key, call `network_tech_stack` and read that
+platform's note. It tells you **what this WiFi platform structurally reports and
+what it withholds** before you interpret anything: how many controllers/APs the
+network runs, whether per-client health/roaming data exists at all on this
+platform, and where a missing metric is a platform limit rather than a link
+problem. This one read prevents the classic misdiagnosis of chasing data the
+platform never exposes (e.g. Google Wifi's absent client roster).
+
 If the `device_id` is **empty** (the client MAC has not yet been promoted to a
 Sprinter device — common for a brand-new or randomized-MAC client), the
 by-`device_id` VM query in Step 3 will return nothing **for that reason**, not
@@ -109,8 +118,14 @@ and still holds its last points (query them — see Step 3). With an empty
 health.
 
 If there is no association (or `wired: true`), the client is wired, offline, or
-on a platform the wifi service does not cover. Distinguish: `wired: true` ⇒ stop
-(it is Ethernet behind an AP). But **offline is not a dead end** — the device's
+on a platform the wifi service does not cover. Before concluding "no coverage,"
+call `network_tech_stack` and read the platform note for this network's WiFi
+platform: it states plainly what that platform reports and what it withholds
+(e.g. Google Wifi exposes no client roster at all, so there is *no* per-client
+snapshot to expect — the emptiness is structural, not a fault). Report that
+limitation to the user rather than chasing missing data. Distinguish:
+`wired: true` ⇒ stop (it is Ethernet behind an AP). But **offline is not a dead
+end** — the device's
 VM series still holds its last points, so go to Step 3 and query the **latest
 available** points anyway (the last value is the last measured health; its
 timestamp dates roughly when it dropped off the air). A live `network_ping`

@@ -13,11 +13,13 @@ allowed-tools: >
   mcp__sprinter__get_reference_doc,
   mcp__sprinter__show_network,
   mcp__sprinter__list_networks,
+  mcp__sprinter__find_network,
   mcp__sprinter__find_device,
   mcp__sprinter__show_device,
   mcp__sprinter__device_presence_history,
   mcp__sprinter__network_issues,
   mcp__sprinter__issue_chart,
+  mcp__sprinter__network_tech_stack,
   mcp__sprinter__isp_info,
   mcp__sprinter__ioda,
   mcp__sprinter__network_info,
@@ -57,14 +59,37 @@ Pin down only what changes the search:
 - **What "slow/broken" means to them:** can't load pages (DNS/WAN), buffering
   video (throughput/jitter), calls drop (loss/jitter/roaming), specific app.
 
-Resolve the network (`show_network` / `list_networks`) and any named device
-(`find_device`). Get `network_id` and `tenant_id`.
+Resolve the network and any named device. The user may belong to more than one
+organization (org); MCP tools span all of them, so **infer first**: if the prompt
+names a device, call `find_device` (omit `network_id` to search every org) — a
+single match resolves the `network_id` and its org. If it names a network by name,
+call `find_network` (name prefix, across all orgs). Otherwise fall back to
+`list_networks` (spans all orgs; rows carry `tenant_id` + `tenant_name`). If a name
+is ambiguous across **two orgs**, disambiguate by org via `ask_user`. Get
+`network_id` (the org/`tenant_id` follows from it).
 
 ## Step 2 — Broad instruments first (cheap, in parallel)
 
 Run the wide checks before any narrow probe. These tell you which layer to
 suspect:
 
+- **Orient FIRST — run both `network_tech_stack` and `show_network`** once at the
+  start (they are complementary, not interchangeable, and together give you the
+  full lay of the land before any narrow probe):
+  - `network_tech_stack` — the **hardware**: ISP + connection technology, the
+    gateway, infrastructure (switches/routers), and the **WiFi platform
+    inventory**, each device with its `device_id` and IP so you can hand those
+    straight to `show_device` / `network_ping` / `snmp_get` without a lookup. It
+    also carries **authored per-platform notes on what each platform can and
+    cannot tell you** (e.g. Google Wifi exposes no client roster, so wireless-vs-
+    wired and AP association are unknowable). Read those notes before concluding
+    anything is broken: an empty WiFi column is often a **structural platform
+    limit**, not a fault or a Sprinter bug — say so instead of chasing it.
+  - `show_network` — the **operational state** the tech stack does not carry:
+    DHCP servers + config, the **agent roster with live online status** (is the
+    network even being observed right now?), LAN addressing, and subnets. A
+    complaint that turns out to be "the agent is offline" or "DHCP is
+    misconfigured" is caught here, cheaply, up front.
 - **What has Sprinter already flagged?** `network_issues` over the complaint
   window (loss/RTT/variance shifts, DNS/DHCP/HTTP probe issues). This is the
   highest-signal first look. Use `issue_chart` to see a flagged metric over

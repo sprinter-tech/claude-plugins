@@ -10,8 +10,10 @@ argument-hint: "[device-address]"
 allowed-tools: >
   Bash, Read, Grep, Glob, Skill, WebSearch,
   mcp__sprinter__show_network,
+  mcp__sprinter__network_tech_stack,
   mcp__sprinter__show_agent,
   mcp__sprinter__list_networks,
+  mcp__sprinter__find_network,
   mcp__sprinter__list_devices,
   mcp__sprinter__show_device,
   mcp__sprinter__show_hints,
@@ -106,13 +108,25 @@ string (e.g. `cma5pqbzu000001nmvtfv1m64`); a network name is a human-readable
 label (e.g. `codeminders`). Never use a network name where a `network_id` is
 required.
 
-To resolve: call **`list_networks`**, match the user's name against the `name`
-field (case-insensitive), and use the corresponding `network_id`. If multiple
-networks match, use `ask_user` to let the user choose. If no match is found,
-present the full list via `ask_user`.
+**Multi-org: prefer inference, disambiguate by org.** The user may belong to more
+than one organization (org); every network belongs to one org, and MCP tools span
+all of them. Resolve in this order:
+
+1. If the prompt names the **device** (a name, an IP/MAC, or a description) — call
+   **`find_device`** for it, omitting `network_id` to search across every org. A
+   single match resolves the `network_id` (and its `tenant` org) directly.
+2. Else if the prompt names a **network by name** — call **`find_network`** (name
+   prefix, across all orgs). A single match resolves the `network_id`.
+3. Else — call **`list_networks`** (spans all orgs; each row carries `tenant_id` +
+   `tenant_name`) and match the name against `name`.
+
+If more than one candidate matches — including the same network name in **two
+different orgs** — present the candidates **with the org** and ask via `ask_user`
+(`org — network — device`; drop the device column when only networks are
+ambiguous). When the user belongs to only one org, org labels are unnecessary.
 
 If the user did not mention a network, you can get the `network_id` from the
-`show_device` result in the next step.
+`show_device` result in the next step (its result also carries the org).
 
 ## Step 2: Gather Context
 
@@ -133,6 +147,14 @@ values for `network_id`. If `show_device` does not return the device, use
 **Check current identification status.** Tell the user what's already known
 about the device (vendor, product_name, device_class, description). If any
 fields are missing, offer to investigate further.
+
+**Understand what sits around the device (optional).** When the problem plausibly
+involves the gateway, an upstream switch/router, or a WiFi platform's coverage,
+call `network_tech_stack`. It returns the network's gateway and infrastructure
+(each with `device_id` and IP, ready for `show_device` / `network_ping` /
+`snmp_get`) plus authored per-platform WiFi notes. Use those notes to avoid
+misdiagnosing a **structural platform limit** (e.g. Google Wifi reports no
+per-client data) as a device fault.
 
 ## Step 3: Investigate
 
