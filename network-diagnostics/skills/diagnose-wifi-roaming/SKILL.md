@@ -56,15 +56,25 @@ the skill branches by platform. Three data sources, each for a different job:
   fine. **Do not read the client's health *values* from evidence** — those
   scalars are frozen at the discovery cadence (a day old on real networks); read
   health from VM.
+- **Mesh backhaul signal is now a live VM series — read it there, not the
+  controller.** When a mesh AP is a roam candidate, get its wireless-backhaul RF
+  quality from VM keyed by that AP's `device_id`:
+  `sprinter_wifi_mesh_backhaul_quality_index{device_id="<AP device_id>"}` on UniFi
+  (a unitless index — lower is worse, single digits ≈ noise floor) or
+  `sprinter_wifi_mesh_backhaul_signal_dbm{device_id="..."}` on Luxul (real dBm),
+  via `timeseries_instant` / `timeseries_range`. It is emitted even while the AP is
+  offline, so a flapping backhaul shows as a trend. Do NOT hit the controller API
+  for it (issue #204 closed that gap).
 - **The live controller API** is touched only for **narrow residual facts** the
-  wifi service does not already store: the per-SSID min-RSSI *config* value, and —
-  only when a mesh AP is an actual roam candidate — that one AP's backhaul
-  signal/rate. Fetch just that field. **Do NOT bulk-GET `/stat/device` or
-  `/stat/sta` for client/AP/health data**: the wifi service already polls those
-  endpoints and stores the normalized result in VM (`sprinter_wifi_*` by
-  device_id) and `show_device` evidence — re-fetching them here re-does that
-  heavy work in your context. Read the processed data first; the controller API
-  is a single-field last resort, not a data source.
+  wifi service still does not store: the per-SSID min-RSSI *config* value.
+  What to avoid is using the controller API as a **bulk data source**: do not GET
+  it to obtain client rosters, per-client link health, or per-radio AP facts —
+  the wifi service already polls the controller for those and stores the
+  normalized result in VM (`sprinter_wifi_*` by device_id) and `show_device`
+  evidence, so re-fetching them floods your context with raw JSON you already
+  have. Rule of thumb: **read the processed data first; reach for the controller
+  only for a specific field neither VM nor evidence carries, and take just that
+  field** (parse out the one value; do not dump the whole response).
 
 **It is strictly read-only.** It never sets min-RSSI, never reconnects, blocks,
 or removes a client, never changes any WLAN or AP config. It diagnoses and
@@ -361,23 +371,30 @@ path through a mesh AP is bounded by its **weakest hop**: a strong
 client→mesh-AP link buys nothing if the mesh AP's backhaul is as weak as (or
 weaker than) the client's current direct link.
 
-Fetch `stat/device` via `network_http` against the controller's IP (same
-implicit auth as Step 3), find the mesh AP's row (`type == "uap"`, match by
-MAC or name), and read its `uplink` object:
+**Read the backhaul SNR-like index from VM first** (issue #204):
+`sprinter_wifi_mesh_backhaul_quality_index{device_id="<mesh AP device_id>"}` via
+`timeseries_instant` / `timeseries_range`. This is UniFi's `uplink.rssi` — the
+same SNR-like index as the evidence `backhaulRssiDbm` (single digits = at the
+noise floor = poor; see the units trap above) — now a live series, so you can see
+whether the backhaul is *degrading over time* and whether it dips exactly when the
+client flaps. Grade it: single digits = poor, teens = fair, 20+ = good. It is
+emitted even while the mesh AP is offline, so a dropped backhaul is visible.
 
-- `signal` — the **true backhaul RSSI in negative dBm** (the evidence
-  `backhaulRssiDbm` is the SNR-like `rssi` — see the units trap above)
+Only if you need the **exact true dBm** figure (the index is enough for a
+verdict), fetch it live: `stat/device` via `network_http` against the
+controller's IP (same implicit auth as Step 3), find the mesh AP's row
+(`type == "uap"`, match by MAC or name), and read its `uplink` object:
+
+- `signal` — the **true backhaul RSSI in negative dBm** (NOT collected as a
+  metric; the VM index above is the collected proxy)
 - `tx_rate` / `rx_rate` — backhaul PHY rates in Kbps; pinned-low rates
   (tens of Mbps on a 5 GHz link) corroborate a starved backhaul
 - `ap_mac` / `uplink_device_name` — confirms the backhaul parent
 
-Grade the backhaul with the same `signal_dbm` good/fair/poor bounds the
-reference defines for clients (roughly: good ≳ −67, poor ≲ −80 dBm — use the
-exact bounds from `wifi-metrics-reference`, not these illustrative figures).
-Carry the grade into Step 5's mesh-bottleneck check and into the candidate-fix
-ledger. If the live read is unavailable, grade from the
-evidence `backhaulRssiDbm` interpreted as SNR (single digits = poor) and say
-the true dBm figure was not readable.
+When you do read the true dBm, grade it with the same `signal_dbm` good/fair/poor
+bounds the reference defines for clients (roughly: good ≳ −67, poor ≲ −80 dBm —
+use the exact bounds from `wifi-metrics-reference`). Carry the grade into Step 5's
+mesh-bottleneck check and the candidate-fix ledger.
 
 **Topology trap — the controller's wired-uplink attribution can lie.** On
 sites whose wired fabric is third-party (no UniFi switches), the controller

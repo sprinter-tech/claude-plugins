@@ -52,14 +52,16 @@ must use the right one for the right job:
 | **3 — residual** | **controller API** (`network_http`, where the platform has one — e.g. UniFi) | live | a **single** field not in VM *or* evidence (rare) — e.g. one vendor "experience" score |
 
 > **Tier 3 is a last resort for one missing field — NOT a data source.** The wifi
-> service already polls the controller's bulk endpoints (`/stat/device`,
-> `/stat/sta`, …), normalizes those large heavy responses, and stores the result
-> in Tiers 1 and 2. Calling those endpoints yourself via `network_http` re-does
-> that work in your context and floods it with raw JSON. So: **never** GET a
-> controller's client-list / device-list / per-radio endpoint to obtain client
-> health, associations, or AP facts — those are already in VM + evidence. Reach
-> for the controller API only when a *specific named field* you need is in
-> neither tier, and fetch just that.
+> service already polls the controller, normalizes its large heavy responses, and
+> stores the result in Tiers 1 and 2. So do **not** use `network_http` against the
+> controller to obtain client rosters, per-client link health, or per-radio AP
+> facts — those are already in VM + evidence, and re-fetching them floods your
+> context with raw JSON you already have. Reaching for the controller API is
+> correct only for a *specific field* that is in neither tier (e.g. UniFi's exact
+> true-dBm backhaul `uplink.signal` — note the SNR-like backhaul *index* IS now a
+> VM series, `sprinter_wifi_mesh_backhaul_quality_index`, so read that first; the
+> controller is only for the precise dBm figure). In that case fetch just that
+> field and parse the one value out; do not dump the whole response.
 
 > **VM is the health source — ALWAYS, including when the device is offline. The
 > snapshot's frozen health values are not a fallback; they are a confusion trap.**
