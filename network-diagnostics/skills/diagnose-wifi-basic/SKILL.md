@@ -49,7 +49,17 @@ must use the right one for the right job:
 |------|--------|-----------|------------|
 | **1 — health** | **VictoriaMetrics** (`timeseries_instant` / `timeseries_range`) | **~1 min** | the link-quality verdict: signal level + trend, retry / deauth / disassoc **rates**, throughput |
 | **2 — structure** | **evidence** (`show_device` `wifiSnapshots`) | discovery cadence (10 min–1 day) | what the client is connected to: serving AP, SSID, band, `connectedSince` — and a **liveness lower bound** (see below) |
-| **3 — residual** | **controller API** (`network_http`, where the platform has one — e.g. UniFi) | live | a few fields not in VM (channel, noise/SNR, tx rate, vendor scores) |
+| **3 — residual** | **controller API** (`network_http`, where the platform has one — e.g. UniFi) | live | a **single** field not in VM *or* evidence (rare) — e.g. one vendor "experience" score |
+
+> **Tier 3 is a last resort for one missing field — NOT a data source.** The wifi
+> service already polls the controller's bulk endpoints (`/stat/device`,
+> `/stat/sta`, …), normalizes those large heavy responses, and stores the result
+> in Tiers 1 and 2. Calling those endpoints yourself via `network_http` re-does
+> that work in your context and floods it with raw JSON. So: **never** GET a
+> controller's client-list / device-list / per-radio endpoint to obtain client
+> health, associations, or AP facts — those are already in VM + evidence. Reach
+> for the controller API only when a *specific named field* you need is in
+> neither tier, and fetch just that.
 
 > **VM is the health source — ALWAYS, including when the device is offline. The
 > snapshot's frozen health values are not a fallback; they are a confusion trap.**

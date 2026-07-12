@@ -56,9 +56,15 @@ the skill branches by platform. Three data sources, each for a different job:
   fine. **Do not read the client's health *values* from evidence** — those
   scalars are frozen at the discovery cadence (a day old on real networks); read
   health from VM.
-- **The live controller API** is touched only for residual facts: per-SSID
-  min-RSSI config, and — when a mesh AP is a roam candidate — the true backhaul
-  signal/rates from `stat/device`.
+- **The live controller API** is touched only for **narrow residual facts** the
+  wifi service does not already store: the per-SSID min-RSSI *config* value, and —
+  only when a mesh AP is an actual roam candidate — that one AP's backhaul
+  signal/rate. Fetch just that field. **Do NOT bulk-GET `/stat/device` or
+  `/stat/sta` for client/AP/health data**: the wifi service already polls those
+  endpoints and stores the normalized result in VM (`sprinter_wifi_*` by
+  device_id) and `show_device` evidence — re-fetching them here re-does that
+  heavy work in your context. Read the processed data first; the controller API
+  is a single-field last resort, not a data source.
 
 **It is strictly read-only.** It never sets min-RSSI, never reconnects, blocks,
 or removes a client, never changes any WLAN or AP config. It diagnoses and

@@ -68,6 +68,15 @@ call `find_network` (name prefix, across all orgs). Otherwise fall back to
 is ambiguous across **two orgs**, disambiguate by org via `ask_user`. Get
 `network_id` (the org/`tenant_id` follows from it).
 
+**Hold onto the `network_id` and pass it into every network-scoped call for the
+rest of the session** — `network_tech_stack`, `show_network`, `network_ping`,
+`timeseries_*`, `network_issues`, and the rest all require it, and a call made
+without it is rejected (you then have to redo it). It does not persist
+automatically between tool calls; treat it as a variable you thread explicitly.
+`show_device` and `find_device` echo the `network_id` in their results, so if you
+ever lose it, read it back from the last such result rather than dropping the
+argument.
+
 ## Step 2 — Broad instruments first (cheap, in parallel)
 
 Run the wide checks before any narrow probe. These tell you which layer to
