@@ -34,6 +34,8 @@ allowed-tools: >
   mcp__sprinter__ipp_printer,
   mcp__sprinter__show_device_classes,
   mcp__sprinter__network_arp_table,
+  mcp__sprinter__topology_neighbors,
+  mcp__sprinter__topology_path,
   mcp__sprinter__show_probes,
   mcp__sprinter__network_issues,
   mcp__sprinter__issue_chart,
@@ -326,16 +328,41 @@ reference / the no-metrics fallback (which `interface-metrics` handles):
 - `1.3.6.1.2.1.105.1.2` — not available on all devices; for per-port
   PoE status use `1.3.6.1.2.1.105.1.1` and vendor-specific MIBs.
 
-## Step 4: Gather Additional Context
+## Step 4: Where does this device sit in the fabric?
 
-If the network has SNMP-capable switches, locate which physical switch port the
-device attaches to and grade that wired link — hand off to
-`Skill(locate-device-uplink)` with the device's MAC/IP. That skill reads the
-switches' MAC forwarding tables over SNMP to pinpoint the attachment point
-(switch + port), report link speed and error/discard counters, and distinguish a
-true edge port from an uplink the device merely transits. Fold its result into
-your findings; a gigabit port negotiated at 100 Mbps or climbing interface
-errors on the device's branch is a finding worth surfacing.
+Sprinter persists the network's topology as a graph — which switch port each
+device is plugged into, which AP each Wi-Fi client is on, how the switches
+interconnect, and how the network egresses to its ISP. Two cheap reads:
+
+**`topology_neighbors(network_id=<net>, device_id=<id>, depth=1)`** — the
+device's immediate attachment: the switch + physical port (`port=`, `if_index=`)
+or the serving AP (`ssid=`, `band=`), plus **`method`** (how the graph knows —
+`LLDP`, `SNMP_FDB`, `WIFI_ASSOC`, `ARP`) and **`confidence`** (0..1). Fold this
+into your device summary. To grade that link's health (speed, error/discard
+rates), hand the `if_index` to `Skill(interface-metrics)` — a gigabit port
+negotiated at 100 Mbps, or climbing interface errors on the device's branch, is
+a finding worth surfacing.
+
+**`depth=2..3`** — the upstream chain (device → AP/switch → gateway → ISP). This
+is the **blast-radius** view: it is what you want when the question is "is
+something upstream of this device broken?", and it replaces assembling that
+chain by hand.
+
+Prefer this over `Skill(locate-device-uplink)`'s live SNMP walk. The graph
+already resolved the attachment from the switches' LLDP and MAC-forwarding
+tables and recorded *how* it knows. Hand off to `locate-device-uplink` when the
+graph says it is **unsure** (low `confidence`, e.g. `ARP:0.3` with no port, or
+the device is `UNPLACED` with a `reason`) — that skill owns the live-SNMP escape
+hatch and the FDB fallback. Do **not** run a live FDB walk to re-confirm a
+high-confidence `LLDP` edge; that is wasted cost.
+
+`topology_neighbors` also takes an `as_of` (RFC3339). Running it now and again
+as of when things worked reveals a device that silently moved switch ports, or
+an extender whose backhaul flipped wired→wireless. See Step 5.
+
+Interpretation guide (the full `method` / `status` / `reason` vocabularies, the
+`if_index` metrics join, and when a live probe *is* warranted): fetch via
+`get_reference_doc`, `name: topology-graph-reference`.
 
 ## Step 5: When did this start, and what happened around then?
 
@@ -353,12 +380,22 @@ source. The full recipe is in the `when-did-this-start` reference (fetch via the
    clustered `roamed`/`disassociated` is the onset (a steady `online -> sleep ->
    online` cycle is healthy power-save, NOT an onset). A flagged
    `network_issues` `startTime` can also be the onset.
-2. **Build the dependency set** — the infra this device depends on, NOT every
-   device on the network: the **gateway** (`network_info`), the **DHCP server**
-   (the gateway, or a DHCP event's `dhcp_server_ip`), the **serving AP**
-   (`evidence.wifiSnapshots[].association.anchorDeviceId`) for a Wi-Fi client,
-   the **wired switch** (`find_device(device_class="network_switch")`), and the
-   upstream **ISP** (`isp_info` / `ioda`).
+2. **Build the dependency set — one call.** The infra this device depends on is
+   exactly the chain the topology graph already holds: call
+   **`topology_path(network_id=<net>, from_device=<id>, to="internet")`**. It
+   returns device → serving AP / switch → gateway → ISP in one read, which *is*
+   the dependency set (`topology_neighbors(depth=3)` gives the same chain plus
+   the siblings hanging off each hop). Do not assemble it by hand from
+   `network_info` + `wifiSnapshots.anchorDeviceId` +
+   `find_device(device_class="network_switch")` + `isp_info` — the graph is the
+   authoritative version of that chain, and it names each hop's `device_id`
+   ready for the next step. Add the **DHCP server** (the gateway, or a DHCP
+   event's `dhcp_server_ip`) if it is not already the gateway, and `isp_info` /
+   `ioda` for the upstream ISP's health.
+
+   If `topology_path` reports `found: false`, read its `status`/`reason` — an
+   `UNPLACED` device with `ARP_NO_MATCH` is itself a finding — then fall back to
+   the hand-assembled set above.
 3. **Sweep a tight window around `T`** (typically `T ± 15 min`). Call
    `network_issues` over `[T − w, T + w]` and read events by `probeType`:
    `pt_dhcp` (config change / rogue server — a DHCP change on the gateway just
@@ -368,6 +405,11 @@ source. The full recipe is in the `when-did-this-start` reference (fetch via the
    **serving AP / gateway** themselves — did one transition `offline` at `T`?
    (DHCP and traceroute have **no** dedicated history tool — their events surface
    through `network_issues`; do not look for `dhcp_history`/`traceroute_history`.)
+   **Also diff the topology across `T`**: `topology_neighbors(device_id, depth=2,
+   as_of=<before T>)` vs the same call now. A device that changed switch port, or
+   an extender whose backhaul flipped from wired (`link_type=l2`) to wireless
+   (`link_type=wifi`) at ≈ `T`, *is* the onset — and nothing else in this sweep
+   would reveal it.
 4. **Report a timeline and read it honestly.** A co-occurring event on a
    dependency is a *candidate* cause, not proof — state it as a correlation. A
    **clean** sweep is also a finding: "nothing changed on the gateway, the

@@ -20,6 +20,8 @@ allowed-tools: >
   mcp__sprinter__network_issues,
   mcp__sprinter__issue_chart,
   mcp__sprinter__network_tech_stack,
+  mcp__sprinter__topology_path,
+  mcp__sprinter__topology_neighbors,
   mcp__sprinter__isp_info,
   mcp__sprinter__ioda,
   mcp__sprinter__network_info,
@@ -103,6 +105,26 @@ suspect:
   window (loss/RTT/variance shifts, DNS/DHCP/HTTP probe issues). This is the
   highest-signal first look. Use `issue_chart` to see a flagged metric over
   time.
+- **The egress path (when a device is named) — the layer map itself.** Call
+  `topology_path(network_id=<net>, from_device=<device_id>, to="internet")`. It
+  returns the device's actual route out: device → serving AP / switch → gateway
+  → ISP, with the `public_ip`, `first_isp_hop`, and `asn` on the egress edge.
+  **This is the localization skeleton** — every layer in the table below is a hop
+  on it, and each hop is named with a `device_id` you can hand straight to
+  `network_ping` / `device_presence_history` / `show_device`. Localizing "the
+  internet is slow" means deciding *which hop on this path* is at fault; getting
+  the path first makes the rest of Step 2 a targeted check rather than a sweep.
+
+  Read the hops for structure, too: a Wi-Fi first hop (`ATTACHED_TO ... ssid=`)
+  says the complaint is behind a wireless link; a `MESH_BACKHAUL` hop says the
+  traffic crosses a wireless backhaul (a common hidden bottleneck — the client's
+  own link can be strong while the extender's backhaul starves it). If it
+  reports `found: false`, read the `status`/`reason` — an `UNPLACED` device is
+  itself a finding, not an error.
+
+  `as_of` (RFC3339) makes this a **diff**: the path now vs the path when things
+  worked. An extender whose backhaul flipped wired→wireless, or a device that
+  moved to a different switch port, shows up here and nowhere else.
 - **"This device keeps going offline / drops intermittently" (a named device):**
   call `device_presence_history` with the device's `device_id` over the complaint
   window. It returns the device's **state-transition timeline** (online ⇄ sleep ⇄
@@ -142,16 +164,20 @@ suspect:
 
 ## Step 3 — Localize to a layer
 
-From the above, decide where the problem lives:
+From the above, decide where the problem lives. When a device was named, each
+layer here maps to a **hop on its `topology_path`** — walk the path outward and
+ask which hop the evidence indicts:
 
-| Signal                                               | Layer            |
-|------------------------------------------------------|------------------|
-| `ioda`/`isp_info` shows upstream outage              | ISP / WAN        |
-| Gateway ping bad, WAN side bad, LAN side fine        | Gateway / WAN    |
-| DNS lookups fail/slow, ping-by-IP fine               | DNS              |
-| Speed test low but loss/latency fine                 | Throughput / WAN |
-| Only one device bad; others on same AP fine          | That device      |
-| Wi-Fi client(s): weak signal / high retries / jitter | Wi-Fi            |
+| Signal                                                    | Layer            |
+|-----------------------------------------------------------|------------------|
+| `ioda`/`isp_info` shows upstream outage                   | ISP / WAN        |
+| Gateway ping bad, WAN side bad, LAN side fine             | Gateway / WAN    |
+| DNS lookups fail/slow, ping-by-IP fine                    | DNS              |
+| Speed test low but loss/latency fine                      | Throughput / WAN |
+| Only one device bad; others on same AP / switch port fine | That device      |
+| Wi-Fi client(s): weak signal / high retries / jitter      | Wi-Fi            |
+| A `MESH_BACKHAUL` hop on the path (wireless backhaul)     | Wi-Fi (mesh)     |
+| An infra hop on the path went `offline` at onset          | That infra hop   |
 
 ## Step 4 — Dispatch
 
@@ -199,7 +225,13 @@ Read-only, on tools already listed above. Full recipe: fetch via
    LAN), **`pt_traceroute`** (path change upstream), `pt_ping`/`pt_dns` on the
    gateway (infra-wide). DHCP and traceroute events have **no** dedicated history
    tool — they come through `network_issues`. Check `isp_info`/`ioda` for an ISP
-   outage that began at `T`.
+   outage that began at `T`. Run `device_presence_history` on **each infra hop
+   the `topology_path` named** (serving AP, switch, gateway) — one of them going
+   `offline` at ≈ `T` localizes the complaint outright.
+   **And diff the path across `T`**: `topology_path(..., as_of=<before T>)` vs
+   now. A route that *changed* at onset — a device that moved switch ports, an
+   extender whose backhaul flipped wired→wireless — is a cause no probe sweep
+   would surface.
 3. **Let the correlation sharpen the dispatch.** A DHCP/path/ISP event at ≈ `T`
    re-points triage away from "one device" toward the infra layer — say so and
    route accordingly. A clean sweep around a single device's onset reinforces

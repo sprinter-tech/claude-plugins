@@ -1,18 +1,23 @@
 ---
 name: locate-device-uplink
 description: >
-  Locate where a device physically attaches to the wired fabric and grade
-  that attachment, using switch MAC forwarding tables over SNMP. Use when the
-  user asks "which switch port is this device on?", "where is this device
-  plugged in?", "is this device's wired link healthy?", "find the uplink for
-  this AP/camera/server", or when a topology answer from a Wi-Fi controller or
-  other source looks wrong and needs independent confirmation. Works for ANY
-  device (not just Wi-Fi) as long as the network has SNMP-capable managed
-  switches. Other skills (troubleshoot-device, diagnose-wifi-roaming) hand off
-  here for switch-port location and wired-uplink grading.
+  Locate where a device attaches to the network fabric — which switch and
+  physical port, or which access point — and grade that attachment. Reads
+  Sprinter's persisted topology graph, which already resolved the attachment
+  from LLDP / switch MAC-forwarding-table / Wi-Fi-association evidence and
+  recorded how it knows and how confident it is. Use when the user asks "which
+  switch port is this device on?", "where is this device plugged in?", "what is
+  this device connected to?", "is this device's wired link healthy?", "find the
+  uplink for this AP/camera/server", or when a topology answer from a Wi-Fi
+  controller or other source looks wrong and needs independent confirmation.
+  Works for ANY device, wired or wireless. Other skills (troubleshoot-device,
+  diagnose-wifi-roaming) hand off here for attachment location and uplink
+  grading.
 argument-hint: "[device-address-or-mac]"
 allowed-tools: >
   Bash, Read, Grep, Glob, Skill,
+  mcp__sprinter__topology_neighbors,
+  mcp__sprinter__topology_path,
   mcp__sprinter__show_network,
   mcp__sprinter__list_networks,
   mcp__sprinter__show_device,
@@ -26,7 +31,7 @@ allowed-tools: >
   mcp__sprinter__get_reference_doc
 ---
 
-Locate the wired uplink for $ARGUMENTS
+Locate the uplink for $ARGUMENTS
 
 > **Output discipline.** Investigate quietly. Do NOT narrate your process to the
 > user — no "let me…", no "now I'll…", no announcing which tools you are loading
@@ -38,33 +43,29 @@ Locate the wired uplink for $ARGUMENTS
 
 ## What this skill does
 
-Given any device (by IP, MAC, hostname, or device_id), find **which switch and
-physical port it attaches to** and **how healthy that attachment is** (link
-speed, operational status, error and discard counters). It does this by reading
-the switches' bridge MAC forwarding tables (FDB) over SNMP — the same data a
-network engineer reads to trace a cable.
+Given any device (by IP, MAC, hostname, or device_id), find **what it attaches
+to** — the switch and physical port for a wired device, the access point for a
+wireless one — and **how healthy that attachment is** (link speed, operational
+status, error and discard rates).
 
-This is **read-only**. Every SNMP operation is a GET or WALK. Nothing changes
-switch or device state. State this contract if the user asks what you will do.
+**The attachment comes from the topology graph, not from a live SNMP walk.**
+Sprinter's topology resolver continuously reads switch LLDP neighbor tables and
+MAC-forwarding tables (FDB), plus Wi-Fi controller association data, and persists
+the resolved attachment as a graph edge — together with **how** it knows
+(`method`) and **how confident** it is (`confidence`). One `topology_neighbors`
+call returns that answer, along with the `if_index` you need to grade the link
+from stored metrics.
 
-This skill is **generic** — it is not Wi-Fi specific. An AP, a camera, a server,
-a printer, or a laptop are all located the same way. It is also
-**vendor-independent**: it reads standard MIBs and works on any SNMP-capable
-managed switch, which makes it the antidote to a Wi-Fi controller (or any other
-system) that is blind to third-party switches and mis-reports topology.
+This matters: walking the FDB yourself costs several SNMP round-trips per switch
+and produces a **weaker** answer than the graph already has. Where a switch
+speaks LLDP, the graph carries an authoritative neighbor record; an FDB walk can
+only *infer* an edge port from MAC counts.
 
-Sprinter now **persists** wired attachments automatically: a background topology
-service resolves each device's switch/port from the same FDB/LLDP evidence and
-stores it as a graph edge (`show_device` may surface an "attached to" fact). This
-skill remains the **live, independent verifier and explainer** — it re-reads the
-switch FDB at question time to confirm (or contradict) the recorded attachment,
-grade the link's health (speed, errors, discards), and show the specific FDB/LLDP
-entries behind the answer. Use it when the persisted attachment is stale, missing,
-disputed, or when the user wants the evidence, not just the conclusion.
+This is **read-only**. State that contract if the user asks what you will do.
 
-Background reference (ships with this plugin): call the `get_reference_doc` MCP tool with
-`name: snmp-topology-discovery-skill-design` — the full methodology, worked example, and OID
-reference.
+Background reference (fetch via the `get_reference_doc` MCP tool, `name:
+topology-graph-reference`): how to read the graph output, the full `method` /
+`status` / `reason` vocabularies, and when a live probe *is* still warranted.
 
 ## MCP Server Availability — Check First
 
@@ -77,208 +78,224 @@ failed MCP connection by guessing or using placeholder data.
 ## Step 0 — Resolve the network and the target
 
 If you do not already have a `network_id`, hand off to `Skill(select-network)`
-or resolve it from context. Then `find_device` the target to get its **MAC
-address** (the key the FDB is indexed by) and its current IP. If you were handed
-a MAC directly, use it as-is. Match the FDB on the address Sprinter recorded for
-the device — Wi-Fi clients with private/randomized MACs appear under that
-randomized MAC, so do not substitute a vendor-OUI guess.
+or resolve it from context. Then `find_device` the target to get its
+**`device_id`** — that is the key `topology_neighbors` is anchored on. (You no
+longer need the MAC: the graph is keyed by `device_id`, and the resolver already
+did the MAC→port matching, including for Wi-Fi clients with randomized MACs.)
 
-## Step 1 — Enumerate SNMP-capable switches (one call, read evidence — do not probe)
-
-```
-find_device(network_id=<net>, device_class="network_switch")
-```
-
-**The class string is `network_switch`** (NETWORK category). Do NOT use
-`switch` — that is a smart *light* switch (POWER category) and will return the
-wrong devices. `find_device` lists each device's `services=[...]` inline; an
-`snmpv2` entry there means SNMP is reachable, so this one call already
-pre-filters to the switches worth walking.
-
-Sprinter records SNMP capability in evidence, so you never probe a device just
-to learn whether it speaks SNMP. If you need the authoritative MIB list for a
-switch, `show_device(query=<switch>, sections="discovery")` returns:
-
-- `evidence.sharedServices[]` — an entry with `type: "snmpv2"` and
-  `attributes.supported_mibs` (e.g. `"BRIDGE-MIB,ENTITY-MIB,IF-MIB,Q-BRIDGE-MIB"`).
-- `evidence.supportedMibs` — a per-MIB map of one representative OID each.
-
-The two MIBs that decide FDB strategy:
-
-| MIB present    | FDB table to walk                             |
-|----------------|-----------------------------------------------|
-| `Q-BRIDGE-MIB` | `dot1qTpFdbPort` (per-VLAN) — **prefer this** |
-| `BRIDGE-MIB`   | `dot1dTpFdbPort` (classic, VLAN-unaware)      |
-
-**Critical:** a VLAN-aware switch advertises BOTH MIBs but parks its forwarding
-database under the Q-BRIDGE table and leaves the classic `dot1dTpFdbPort`
-**empty**. When `Q-BRIDGE-MIB` is present, walk `dot1qTpFdbPort` first; fall
-back to `dot1dTpFdbPort` only if Q-BRIDGE is absent or its walk returns nothing.
-Walking the wrong table and concluding "device not on this switch" is the trap.
-
-## Step 2 — Walk each switch's FDB
-
-**Q-BRIDGE path (preferred):**
+## Step 1 — Read the attachment from the graph (one call)
 
 ```
-snmp_walk(address=<switch IP>, oid=".1.3.6.1.2.1.17.7.1.2.2.1.2", total_time="40s")
+topology_neighbors(network_id=<net>, device_id=<target device_id>, depth=1)
 ```
 
-Each returned OID's suffix is `<VLAN>.<6 MAC octets in decimal>`; the value is
-the **bridge port number**. The trailing six octets are the MAC regardless of
-VLAN-prefix length, so match a target on the **last six** octets.
-
-**Classic BRIDGE path (fallback):**
+That is the whole location step. The result is an edge list; the edge that
+matters is the one **out of the target device**:
 
 ```
-snmp_walk(address=<switch IP>, oid=".1.3.6.1.2.1.17.4.3.1.2", total_time="40s")
+Tesla (7e57d79c) --ATTACHED_TO:wifi:WIFI_ASSOC:0.90--> ap-garage (a1b2c3d4)  [1 hop, upstream]
+    ssid=Crocodile band=5ghz
 ```
 
-Suffix is just the 6 MAC octets; value is the bridge port.
-
-**Converting a MAC to the decimal suffix:** `74:83:c2:23:e5:75` →
-`116.131.194.35.229.117` (each hex octet as decimal). Use `Bash` (`python3`) for
-the conversion and for tallying — do not eyeball a 50-row table.
-
-## Step 3 — Map bridge port → ifIndex (never assume identity)
-
-Bridge port numbers are **not** ifIndex values. Walk:
-
 ```
-snmp_walk(address=<switch IP>, oid=".1.3.6.1.2.1.17.1.4.1.2", total_time="20s")
+hub (f7596f98) --ATTACHED_TO:wired:LLDP:0.95--> was-sw1201 (3c0ca753)  [1 hop, upstream]
+    port=1/0/32 if_index=32
 ```
 
-`dot1dBasePortIfIndex`: suffix = bridge port, value = ifIndex. On some switches
-this is an identity map (port N → ifIndex N) but **that is vendor-dependent —
-always read this table**; many switches offset or re-order, and LAG/CPU ports
-use large synthetic indices.
+Read off:
 
-## Step 4 — Read the interface facts
+- **The infrastructure peer** — the switch or AP the device attaches to.
+- **`port=` / `if_index=`** — the physical port (wired). `if_index` is the join
+  key into the interface metrics (Step 2).
+- **`ssid=` / `band=`** — the wireless attachment (Wi-Fi).
+- **`method` and `confidence`** — see Step 3; this is what tells you whether to
+  trust the answer or reach for a live probe.
 
-Read the interface's identity (`ifName`/`ifAlias`) live to confirm the port you
-located (4a), then hand off to `interface-metrics` for the actual link grade —
-throughput, speed, error/discard rates, link state (4b).
+**Want the upstream chain too?** `depth=2` or `depth=3` walks device → AP/switch
+→ gateway → ISP in the same call. Use it when the question is "did something
+upstream of this device break", not just "which port is it on".
 
-### 4a — Identity, speed, status (live `snmp_get`, append `.<ifIndex>`)
+**No attachment?** The tool reports `found: false` with a placement `status`
+(`PLACED` / `PLACED_BY_HINT` / `UNPLACED`) and a `reason`. That is a **real
+answer**, not an error — report it. `ARP_NO_MATCH` (by far the most common),
+`NOT_IN_FDB`, `NO_FDB_SOURCE`, and the rest each say something specific; the
+`topology-graph-reference` doc lists them all. Do **not** invent a port.
 
-| Fact                   | OID base                   |
-|------------------------|----------------------------|
-| `ifName`               | `.1.3.6.1.2.1.31.1.1.1.1`  |
-| `ifAlias` (port label) | `.1.3.6.1.2.1.31.1.1.1.18` |
-| `ifHighSpeed` (Mbps)   | `.1.3.6.1.2.1.31.1.1.1.15` |
-| `ifOperStatus` (1=up)  | `.1.3.6.1.2.1.2.2.1.8`     |
+## Step 2 — Grade the link (hand off to `interface-metrics`)
 
-`ifName` values come back base64-encoded octet strings (e.g. `MS8wLzI1` =
-`1/0/25`) — decode with `Bash`. These are fine to read live point-in-time.
+With the switch and the `if_index` from Step 1, hand off to
+`Skill(interface-metrics)` with the switch's `device_name` and that `if_index`.
+It reads the stored `sprinter_interface_*` series and returns throughput vs
+speed, error and discard **rates** over a window, and link state.
 
-### 4b — Traffic / error / discard rates (hand off to `interface-metrics`)
+**Port identity comes from the graph; link health comes from the time series.**
+Never sample a live SNMP counter twice with a sleep to fake a rate — the stored
+series already gives you rates, and `interface-metrics` handles the no-series
+fallback (a single live `snmp_get`, reported honestly as a cumulative snapshot).
 
-Once you know the attachment port's `if_index`, hand off to
-`Skill(interface-metrics)` with the switch `device_name` and that `if_index` to
-grade the link: throughput vs speed, error and discard **rates** over a window,
-and link state. That skill reads stored metrics (`sprinter_interface_*`) rather
-than live SNMP counters — **never** sample a counter twice with a sleep to fake
-a rate. It also handles the no-series fallback (a single live `snmp_get`,
-reported as a cumulative snapshot).
-
-Carry its verdict into Step 6: a port erroring/discarding, flapping, or
+Carry its verdict into Step 4: a port erroring/discarding, flapping, or
 negotiated below its capable speed caps every device on the branch.
 
-## Step 5 — Edge port vs uplink/trunk (the determination that makes this correct)
+## Step 3 — Judge the evidence: `method` + `confidence`
 
-A MAC learned on a port means the device is **reachable through** that port — not
-necessarily plugged into it. A switch's **uplink** learns every MAC on the far
-side of the fabric. Disambiguate by **how many distinct MACs that port learned**
-(tally from the same FDB walk):
+The graph tells you not just *what* it concluded but *how*. This replaces the
+old MAC-count edge-vs-uplink heuristic — the resolver already made that
+determination, and it made it with more evidence than a single FDB walk has.
 
-- **1–2 MACs on the port** → edge/access port; the device is (almost certainly)
-  directly attached here. This port's interface health IS the device's real
-  wired link.
-- **Many MACs on the port** → uplink/trunk toward the rest of the network; the
-  device is *downstream*, reached through this switch but attached elsewhere.
-  Find the switch where the MAC sits on a **low-count** port — that is the true
-  attachment point.
+| `method`     | Trust   | What it means                                  |
+|--------------|---------|------------------------------------------------|
+| `LLDP`       | High    | Switch and device told us. Authoritative.      |
+| `SNMP_FDB`   | High    | Read from the switch's MAC-forwarding table.   |
+| `WIFI_ASSOC` | High    | Controller reports this client on this AP.     |
+| `WIFI_MESH`  | Med     | Mesh association.                              |
+| `ARP`        | **Low** | Inferred from ARP. Usually carries **no port** |
+| `MANUAL`     | —       | A human pinned it.                             |
 
-**Multi-switch correlation.** With more than one SNMP switch, walk all of them
-and cross-reference:
+Note the exact strings: **`SNMP_FDB`**, not `FDB`; **`WIFI_ASSOC`**, not `WIFI`.
 
-- The switch that sees the **other switches on distinct ports** (not all funneled
-  onto one uplink) is the **core/aggregation** switch.
-- Each leaf switch sees everything-but-itself on its single uplink port, pointing
-  back toward the core.
-- A target that appears on a low-count edge port on exactly one switch is
-  attached there. A target that appears only on **uplink/downlink ports
-  everywhere** is behind an unmanaged or SNMP-silent switch (or an AP) — say so
-  honestly rather than claiming a port.
+`confidence` is 0..1. An `LLDP:0.95` edge is authoritative. An `ARP:0.3` edge
+with no `port=` is the graph telling you honestly that it does not really know —
+**that, and only that, is when a live probe earns its cost** (Step 5).
 
-## Step 6 — Present findings
+> **`MESH_ANCHOR` edges carry NO confidence — it renders as `-`, not `0.00`.**
+> Absent is not zero. Do not read a missing confidence on a mesh anchor as
+> low confidence and go probing.
+
+**Behind an unmanaged switch.** When the graph places a device on a port that
+also carries many other devices, or leaves it `UNPLACED` with `MULTI_MAC_PORT`,
+the device sits behind an unmanaged (or SNMP-silent) switch or an AP. Say so
+honestly rather than claiming a port.
+
+## Step 4 — Present findings
 
 Report, for the target device:
 
-- **Attachment point** — switch name + physical port (`ifName`/`ifAlias`), or
-  "behind an unmanaged switch off <core> port <p>" when that is the truth.
-- **Link grade** — `ifHighSpeed` + `ifOperStatus` (live, from 4a) and the
-  error/discard **rates** from metrics (4b). Flag a gigabit-capable port
-  negotiated at 100 Mbps, or a sustained nonzero error/discard rate, as a
-  finding in its own right — that caps every device on the branch. If you had to
-  fall back to a single live counter snapshot (no metrics series), say the
-  number is cumulative-since-boot, not a rate.
-- **Path to the gateway** — the chain of uplink ports across switches, if
-  multiple switches.
-- **Topology corrections** — when this independent FDB view contradicts a
-  controller's reported topology, state the corrected topology and that the
-  controller's was inference (see the wired-attribution trap, via
-  `get_reference_doc`, `name: unifi-controller-api`).
+- **Attachment point** — switch name + physical port (or AP + SSID/band), with
+  the `method` and `confidence` that back it. "Attached to `was-sw1201` port
+  `1/0/32` (LLDP, confidence 0.95)" is a much stronger statement than a bare
+  port number, and the qualifier is the point.
+- **Link grade** — speed, operational status, and the error/discard **rates**
+  from `interface-metrics` (Step 2). Flag a gigabit-capable port negotiated at
+  100 Mbps, or a sustained nonzero error/discard rate, as a finding in its own
+  right — that caps every device on the branch. If `interface-metrics` had to
+  fall back to a single live counter snapshot, say the number is
+  cumulative-since-boot, not a rate.
+- **Upstream chain** — if you ran `depth>1`, the chain of links up to the
+  gateway and ISP.
+- **Topology corrections** — when the graph contradicts a controller's reported
+  topology, state the corrected topology and note that the controller's was
+  inference (see the wired-attribution trap, via `get_reference_doc`, `name:
+  unifi-controller-api`). The graph's LLDP/FDB view is independent of any
+  controller.
 
-**Honesty about limits.** State what you could NOT determine. FDB alone cannot
-tell whether a 100 Mbps port is a damaged/2-pair cable or a 100M-only far-end
-device negotiating down — that needs the far device or `dot3StatsDuplexStatus`
+**Honesty about limits.** State what you could NOT determine, and say which
+`method`/`confidence` the answer rests on. The graph cannot tell whether a
+100 Mbps port is a damaged/2-pair cable or a 100M-only far-end device negotiating
+down — that is device *configuration*, and it needs `dot3StatsDuplexStatus`
 (EtherLike-MIB `.1.3.6.1.2.1.10.7.2.1.19.<ifIndex>`). Do not assert the cause;
 name the ambiguity and the next probe that would resolve it.
 
+**Truncation is never silent.** If the output ends with
+`# TRUNCATED: showing N of M edges`, say so or re-run with a higher `max_edges`.
+
+## Step 5 — The live-SNMP escape hatch (only when the graph says it is unsure)
+
+Live SNMP is for **configuration** and for **facts we do not collect** — not for
+re-deriving topology the graph already resolved. Reach for it **only** when:
+
+1. **The graph says it is unsure** — low `confidence` (e.g. `ARP:0.3` with no
+   `port=`), or the device is `UNPLACED`. The `method`/`confidence` fields exist
+   precisely so you can see this.
+2. **You need a fact the graph does not store** — e.g. `dot3StatsDuplexStatus`
+   to separate a damaged cable from a 100M-only far end. That is configuration,
+   not topology.
+3. **You suspect staleness** — the device has been silent long enough to age out
+   of the switch's FDB. In practice this surfaces as case 1 (`UNPLACED`).
+
+**Refreshing a stale FDB entry is cheap and often enough**: `network_ping` the
+device to make the switch re-learn its MAC, then re-run `topology_neighbors`.
+Try that before a full FDB walk.
+
+When you do fall through, walk the FDB yourself:
+
+- Enumerate switches: `find_device(network_id=<net>, device_class="network_switch")`.
+  **The class string is `network_switch`** (NETWORK category) — `switch` is a
+  smart *light* switch (POWER category). The inline `services=[...]` shows an
+  `snmpv2` entry when SNMP is reachable, so this one call pre-filters.
+- **Q-BRIDGE first, BRIDGE as fallback.** A VLAN-aware switch advertises both
+  MIBs but parks its FDB under Q-BRIDGE and leaves the classic table **empty** —
+  walking the wrong one and concluding "device not on this switch" is the trap.
+  - Q-BRIDGE: `snmp_walk(oid=".1.3.6.1.2.1.17.7.1.2.2.1.2")` — suffix is
+    `<VLAN>.<6 MAC octets in decimal>`, value is the **bridge port**. Match on
+    the **last six** octets.
+  - Classic BRIDGE: `snmp_walk(oid=".1.3.6.1.2.1.17.4.3.1.2")` — suffix is the
+    6 MAC octets.
+- **Bridge port ≠ ifIndex.** Always walk `dot1dBasePortIfIndex`
+  (`.1.3.6.1.2.1.17.1.4.1.2`) to map bridge port → ifIndex. The identity map is
+  vendor-dependent; never assume it.
+- Convert the MAC to its decimal suffix with `Bash` (`python3`), and tally MACs
+  per port there too — do not eyeball a 50-row table. **1–2 MACs on a port** =
+  edge/access port (the device is attached here); **many MACs** = uplink/trunk
+  (the device is downstream, attached elsewhere).
+- Then read `ifName` (`.1.3.6.1.2.1.31.1.1.1.1`, base64 octet strings — decode
+  with `Bash`) and `ifAlias` (`.1.3.6.1.2.1.31.1.1.1.18`) to name the port, and
+  hand `if_index` to `interface-metrics` as in Step 2.
+
+**Say in the report that you fell through, and why** — "the graph placed this
+device only by ARP (confidence 0.3, no port), so I walked the switch FDB
+directly". A live walk that merely re-confirms a high-confidence LLDP edge is
+wasted cost; do not run one.
+
+The full methodology, worked example, and OID reference live in the
+`snmp-topology-discovery-skill-design` doc (fetch via `get_reference_doc`).
+
 ## Guards and failure modes
 
-- **dot1d-vs-dot1q fork** (Step 1): Q-BRIDGE first when present; an empty classic
-  table on a VLAN-aware switch is expected, not "device absent."
-- **Bridge-port ≠ ifIndex** (Step 3): always read `dot1dBasePortIfIndex`.
-- **Stale FDB**: entries age out (~5 min). A device silent for a while may be
-  missing from the table though still attached. If an expected MAC is absent,
-  `network_ping` it to refresh the switch's learning, then re-walk. Note this in
-  the report.
-- **L2 scope**: FDB only resolves devices in the same L2 domain as the switch. A
-  target on a different VLAN/subnet won't appear; use `network_arp_table` (it
-  exposes a `router_snmp` source) to locate the L3 gateway, then the switch
-  behind it.
-- **SNMP budget**: per switch this is one FDB walk + one port→ifIndex walk + a
-  small batch of per-ifIndex GETs. With many switches, walk all FDBs first,
-  narrow to the switch owning the MAC on a low-count port, and only THEN pull
-  full interface stats — do not pull every port's counters on every switch.
-- **Rates come from metrics, not a sleep** (Step 4b): grade the link via the
-  `interface-metrics` skill (stored `sprinter_interface_*` series), never by
-  sampling a live counter twice with a delay.
+- **Trust the graph by default.** Its LLDP evidence is *better* than what an FDB
+  walk can infer. Fall through to live SNMP only on the Step 5 triggers.
+- **`found: false` is an answer.** Report the `status` and `reason`; never invent
+  a port. `ARP_NO_MATCH` is the dominant reason and means exactly what it says.
+- **Absent ≠ zero.** `MESH_ANCHOR` has no `confidence`; it renders `-`.
+- **Names are not unique.** Real networks contain several distinct devices
+  sharing one name — the output prints `name (device_id-prefix)` for exactly this
+  reason. Disambiguate by id, not name.
+- **Stale attachment**: a device silent long enough ages out of the FDB. It
+  surfaces as `UNPLACED`; `network_ping` then re-query before escalating.
+- **Rates come from metrics, not a sleep** (Step 2): grade the link via
+  `interface-metrics` (stored `sprinter_interface_*` series), never by sampling
+  a live counter twice with a delay.
+
+## Time travel — "it used to work"
+
+`topology_neighbors` takes an `as_of` (RFC3339). Run it now, run it again as of
+when things worked, and diff. A device that silently moved to a different switch
+port, or an extender whose backhaul flipped from wired to wireless, shows up
+immediately — and that diff is often the whole diagnosis. There is no live-SNMP
+equivalent of this: the switch only knows *now*.
 
 ## When this skill is reached from another skill
 
 - **From `troubleshoot-device`** (its "find which physical switch port" step):
-  return the attachment point and link grade; that skill folds it into its device
-  summary.
+  return the attachment point (with `method`/`confidence`) and the link grade;
+  that skill folds it into its device summary.
 - **From `diagnose-wifi-roaming`** (grading a mesh AP's real wired uplink, or
-  confirming/refuting the controller's wired-uplink attribution): grade the
-  switch port the AP's wired MAC attaches to, and report whether the AP is on a
-  managed edge port or behind an unmanaged segment — that is the AP's true wired
-  backhaul quality, independent of anything the controller inferred. **This
-  verdict covers ONLY the wired backhaul** — make that explicit so it is not read
-  as a complete uplink verdict. The **wireless** side of the AP (per-client
-  signal/SNR/retries, the radio health) is graded separately by the caller via
-  `diagnose-wifi-basic` / `diagnose-wifi-roaming` against the WiFi catalog bands
-  (via `get_reference_doc`, `name: wifi-metrics-reference`); this skill emits no Wi-Fi metric.
+  confirming/refuting the controller's wired-uplink attribution): return the
+  switch port the AP attaches to and its link grade, or say honestly that the AP
+  is behind an unmanaged segment. The graph's view is derived from the switches'
+  own LLDP/FDB, independent of anything the controller inferred — which is
+  exactly why it can refute the controller. **This verdict covers ONLY the wired
+  backhaul** — make that explicit so it is not read as a complete uplink verdict.
+  The **wireless** side of the AP (per-client signal/SNR/retries, radio health)
+  is graded separately by the caller via `diagnose-wifi-basic` /
+  `diagnose-wifi-roaming` against the WiFi catalog bands (via
+  `get_reference_doc`, `name: wifi-metrics-reference`); this skill emits no Wi-Fi
+  metric.
 
 ## Seeing the whole picture in the UI
 
-The same attachment data this skill computes over SNMP is also rendered
-network-wide in the Sprinter web UI under a network's **Topology** tab: an
-interactive graph of devices, their switch/AP attachments, and the gateway→ISP
-uplink, with each device colored by presence. When a user wants to *see* where a
-device sits in the fabric (rather than get a single port verdict), point them
-there; this skill remains the tool for a precise, evidence-backed single-device
-port location and link grade.
+The same graph this skill reads is rendered network-wide in the Sprinter web UI
+under a network's **Topology** tab: an interactive view of devices, their
+switch/AP attachments, and the gateway→ISP uplink, with each device colored by
+presence. When a user wants to *see* where a device sits in the fabric (rather
+than get a single port verdict), point them there; this skill remains the tool
+for a precise, evidence-backed single-device port location and link grade.

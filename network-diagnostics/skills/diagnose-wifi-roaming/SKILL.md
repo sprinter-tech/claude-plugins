@@ -2,8 +2,9 @@
 name: diagnose-wifi-roaming
 description: >
   Diagnose a Wi-Fi client's link quality and sticky-client / roaming problems,
-  read-only, from Sprinter's stored WiFi evidence (with a narrow live
-  controller-API fallback). The link-quality verdict works on any supported WiFi
+  read-only, from live WiFi metrics, the persisted topology graph, and Sprinter's
+  stored WiFi evidence (with a narrow live controller-API fallback). The
+  link-quality verdict works on any supported WiFi
   platform; the deeper roaming/mesh/min-RSSI analysis is UniFi-controller-specific
   today and degrades gracefully on other platforms. Use when a device has a
   weak/jittery/retry-heavy wireless link, is "stuck" on a far access point, when
@@ -20,6 +21,8 @@ allowed-tools: >
   mcp__sprinter__network_tech_stack,
   mcp__sprinter__show_device,
   mcp__sprinter__find_device,
+  mcp__sprinter__topology_neighbors,
+  mcp__sprinter__topology_path,
   mcp__sprinter__device_presence_history,
   mcp__sprinter__timeseries_instant,
   mcp__sprinter__timeseries_range,
@@ -50,8 +53,14 @@ the skill branches by platform. Three data sources, each for a different job:
   *now*, and is it getting worse". The per-platform metric set + the PromQL +
   the health bands are in the generated reference — fetch it with the
   `get_reference_doc` MCP tool (`name: wifi-metrics-reference`).
-- **The topology — serving AP, the AP fleet, per-AP radios, mesh uplinks —
-  comes from evidence** (`show_device` `wifiSnapshots`). Sprinter's wifi service
+- **The uplink topology — serving AP, wired-vs-mesh backhaul, the path out to the
+  ISP — comes from the topology graph** (`topology_path` / `topology_neighbors`).
+  It is vendor-neutral and derived from the switches' own LLDP/FDB plus
+  association data, so it is **independent of the controller's uplink inference**
+  — which matters, because that inference demonstrably lies on sites with
+  third-party switches (see the topology trap in Step 2a).
+- **The per-AP radios and the AP fleet roster come from evidence**
+  (`show_device` `wifiSnapshots.controllerSummary`). Sprinter's wifi service
   persists it on the discovery cadence; it is structural, so its staleness is
   fine. **Do not read the client's health *values* from evidence** — those
   scalars are frozen at the discovery cadence (a day old on real networks); read
@@ -158,22 +167,36 @@ above are reference reading, not a dependency.
    controller exists but has no token channel, run the evidence-only diagnosis
    and **skip the min-RSSI check — and say so in the verdict**.
 
-## Where the data lives — health from VM, topology from evidence
+## Where the data lives — health from VM, uplink from the graph, radios from evidence
 
 The client's **link quality** (signal, retry rate, and their trend) is read
-**live from VictoriaMetrics** by `device_id` — ~1-min fresh. The **topology**
-(serving AP, the AP fleet, mesh uplinks) is read from **evidence**
-`wifiSnapshots`, which is structural and fine at the discovery cadence.
+**live from VictoriaMetrics** by `device_id` — ~1-min fresh. The **uplink
+topology** (serving AP, wired-vs-mesh backhaul, path to the ISP) comes from the
+**topology graph**. The **AP fleet roster and per-AP radios** come from
+**evidence** `wifiSnapshots`, which is structural and fine at the discovery
+cadence.
 
 `show_device` returns `evidence.wifiSnapshots` in its default overview (on
 older deployed servers that predate this, `sections="discovery"` also carries
 them — use that as a fallback).
 
-| Source                                  | Field                               | Gives you                                                                                                                                                                                         |
-|-----------------------------------------|-------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **VM** (`timeseries_*`, by `device_id`) | `sprinter_wifi_client_*`            | the client's LIVE signal + retry/deauth/disassoc **rate** + trend — the link-quality verdict. Metric set / PromQL / bands per platform: via `get_reference_doc` (`name: wifi-metrics-reference`). |
-| **Evidence**                            | `wifiSnapshots[].association`       | STRUCTURE: serving AP (`anchorDeviceId`), `ssid`, `band`, `wired`, `connectedSince`. **Not** the live health values.                                                                              |
-| **Evidence**                            | `wifiSnapshots[].controllerSummary` | The whole AP fleet, per-AP radios, client counts, and wired-vs-wireless uplink topology — in ONE call.                                                                                            |
+**VM** — `timeseries_*` on `sprinter_wifi_client_*`, by `device_id`. The client's
+LIVE signal + retry/deauth/disassoc **rate** + trend: the link-quality verdict.
+Metric set / PromQL / bands per platform: `get_reference_doc`,
+`name: wifi-metrics-reference`.
+
+**Graph** — `topology_path` / `topology_neighbors`. The UPLINK: serving AP,
+wired (`link_type=l2`, with switch + `port` + `if_index`) vs mesh
+(`MESH_BACKHAUL`) backhaul, and the path out to the ISP. Vendor-neutral;
+supports `as_of` time-travel.
+
+**Evidence** — `wifiSnapshots[].association`. STRUCTURE: serving AP
+(`anchorDeviceId`), `ssid`, `band`, `wired`, `connectedSince`. **Not** the live
+health values.
+
+**Evidence** — `wifiSnapshots[].controllerSummary`. The AP fleet roster, per-AP
+**radios** (channel, width, tx power, utilization), and client counts — in ONE
+call.
 
 ### Structural fields on the client's `association` (evidence)
 
@@ -351,15 +374,55 @@ deauth/error rate "climbs over the evening" across a 2 h+ hole, the endpoints ar
 real but the slope between them is unobserved — state the gap rather than
 laundering missing data into a clean worsening story.
 
-### Step 2 — Map the fleet from the controller's evidence
+### Step 2 — Map the fleet: topology graph first, controller evidence for the radios
 
-`show_device` on the controller; read
-`evidence.wifiSnapshots[].controllerSummary`. Confirm the client's
-`anchorDeviceId` against the `accessPoints[]` list. Then scan the fleet for
-**wireless-uplinked APs** (`uplink.type == "WIRELESS"`): note each mesh AP's
-parent (`parentName` / `parentMac`), `backhaulRssiDbm`, and `backhaulBand`.
-**This is the critical step** — a mesh AP whose backhaul shares the serving
-AP (and SSID band) with the troubled client is what makes min-RSSI unsafe.
+**2a — The uplink topology comes from the graph (vendor-neutral).** Call
+`topology_path(network_id=<net>, from_device=<client device_id>, to="internet")`.
+It returns the client's actual route out — client → serving AP → (mesh backhaul,
+if any) → gateway → ISP — and it is the **authoritative uplink record**: the
+topology resolver derived it from the switches' LLDP/FDB and the controller's
+association data, so it does not depend on a controller's uplink *inference*
+(see the topology trap below). Read the hop types:
+
+- **`ATTACHED_TO`** from the client names the **serving AP** (cross-check it
+  against `anchorDeviceId` from Step 1a) with `ssid` / `band`.
+- **`ATTACHED_TO` with `link_type=l2`** out of that AP = a **wired** uplink. The
+  edge carries the switch, `port=`, and `if_index=` — hand those to Step 2b.
+- **`MESH_BACKHAUL`** out of that AP = a **wireless** backhaul. This is the
+  mesh signal, and it is the one that makes min-RSSI unsafe (Step 5).
+- **`MESH_ANCHOR`** = the mesh's exit point back into the wired fabric.
+
+To see the whole AP fleet's uplink topology at once rather than one client's
+path, use `topology_neighbors(network_id=<net>, device_class="access_point")` —
+an unanchored subgraph of the APs and how each one gets upstream.
+
+> **Mesh nodes whose parent is deliberately unknown.** Some platforms
+> (Google/Nest Wifi and others) report *whether* a node's backhaul is wired or
+> wireless but **not which node it meshes to**. Rather than fabricate a parent,
+> the graph attaches such a node to a synthetic `WiFi Mesh <group>` cloud
+> (`MESH_BACKHAUL:...:WIFI_MESH_UNRESOLVED`). **Report the medium, never a
+> parent.** "The extender's backhaul is wireless" is correct; "the extender is
+> connected to AP-X" would be a fabrication. `MESH_ANCHOR` edges carry **no
+> `confidence`** — it renders as `-`, not `0.00`; absent is not zero, so do not
+> read it as "the graph is guessing".
+
+Full interpretation guide (the `method` / `status` / `reason` vocabularies, the
+`if_index` metrics join): fetch via `get_reference_doc`,
+`name: topology-graph-reference`.
+
+**2b — The radios still come from the controller (UniFi).** `show_device` on the
+controller; read `evidence.wifiSnapshots[].controllerSummary`. This is where the
+per-AP **radio** facts live, and the graph does not carry them: `radios[]`
+(`band`, `channel`, `channelWidthMhz`, `txPowerDbm`, `channelUtilRatio`,
+`clientCount`), plus `accessPointsOnline` and the per-AP `model` / `online`
+state. Use it for the RF picture, not for the uplink topology — the graph
+already answered that, and answered it better.
+
+The `controllerSummary.accessPoints[].uplink` object (`type`, `parentName`,
+`backhaulRssiDbm`, `backhaulBand`) remains useful as a **cross-check** and as
+the source of `backhaulBand`. Where it and the graph disagree about a **wired**
+uplink's neighbor, **the graph wins** — that is exactly the misattribution the
+topology trap below describes.
 
 ### Step 2a — Grade the roam candidate's own uplink (mandatory for mesh APs)
 
@@ -421,17 +484,27 @@ while B's "wired" parent is A). Resolution rules:
   topology (wired AP is the anchor; the portless mesh AP hangs off it) —
   do not present the controller's loop as fact.
 
-**Resolve the wired truth independently when SNMP switches exist.** When the
-roam candidate's uplink is `type: "wire"` (or the controller's wired
-attribution is in doubt per the loop trap above), and the network has
-SNMP-capable switches (`find_device(device_class="network_switch")` returns
-any with an `snmpv2` service), hand off to `Skill(locate-device-uplink)` with
-the AP's wired MAC. It reads the switches' MAC forwarding tables to pinpoint
-the AP's real attachment port and grade that link's speed and error counters —
-which is the AP's true wired backhaul quality, independent of anything the
-controller inferred. A wired uplink capped at 100 Mbps or accumulating errors
-caps every client on that AP, so carry the grade into the mesh-bottleneck check
-and the candidate-fix ledger exactly as you would a weak wireless backhaul.
+**Resolve the wired truth independently — the graph already did.** When the roam
+candidate's uplink is `type: "wire"` (or the controller's wired attribution is in
+doubt per the loop trap above), read the AP's attachment from the topology graph:
+`topology_neighbors(network_id=<net>, device_id=<AP device_id>, depth=1)`. The
+edge out of the AP names the real switch, `port=`, and `if_index=`, together with
+the `method` (`LLDP` = the switch and the AP told us — authoritative) and
+`confidence` behind it. **This is independent of anything the controller
+inferred**, which is precisely why it can refute the loop: the graph reads the
+switches' own LLDP/FDB, and a UniFi controller that cannot see a third-party
+switch has no such source.
+
+Then hand the switch's `device_name` and that `if_index` to
+`Skill(interface-metrics)` to grade the link — speed, error and discard rates
+over a window. A wired uplink capped at 100 Mbps or accumulating errors caps
+every client on that AP, so carry the grade into the mesh-bottleneck check and
+the candidate-fix ledger exactly as you would a weak wireless backhaul.
+
+Escalate to `Skill(locate-device-uplink)` **only if the graph says it is
+unsure** — low `confidence` (e.g. `ARP:0.3` with no `port=`), or the AP is
+`UNPLACED`. That skill owns the live-SNMP FDB fallback. Do not run a live FDB
+walk to re-confirm a high-confidence `LLDP` edge.
 
 ### Step 3 — Read the SSID config (live API read)
 
@@ -497,6 +570,15 @@ short form:
    - **`network_issues`** over `[T − w, T + w]` for the network: a `pt_dhcp`
      change or `pt_traceroute`/`pt_ping` infra event coinciding with `T` means
      the "roaming" is collateral from a wider change, not a sticky-client fault.
+   - **Diff the uplink topology across `T`** —
+     `topology_path(from_device=<client>, to="internet", as_of=<before T>)` vs
+     the same call now. This is the highest-value check in the sweep and has no
+     equivalent elsewhere: **an AP whose backhaul flipped from wired
+     (`link_type=l2`) to wireless (`MESH_BACKHAUL`) at ≈ `T`** — a yanked or
+     failed Ethernet uplink — makes every client on it suddenly cross a wireless
+     backhaul, which looks exactly like a client-side roaming/link problem and
+     is not one. A client that moved to a different serving AP at `T`, or an AP
+     that moved switch ports, shows up here too.
 3. **Carry the onset into the verdict.** "All clients on this AP began roaming at
    21:12, when the AP rebooted" → not a min-RSSI problem. "Only this client, no
    infra event in the window, signal has been weak for days" → genuine
@@ -522,14 +604,17 @@ tool, `name: interpreting-wifi-telemetry`):
    client chose to stay on a far AP. A Reconnect (UI) or device-side radio
    bounce only forces re-association and may re-pick the same AP.
 3. **Is min-RSSI safe here?** Run BOTH failure-mode checks from the doc:
-   - **Mesh-backhaul collision:** does any `WIRELESS`-uplinked AP use the
+   - **Mesh-backhaul collision:** does any mesh AP (a `MESH_BACKHAUL` hop in the
+     graph, or `uplink.type == "WIRELESS"` in the controller summary) use the
      *same serving AP* as the client, on the *same SSID band* a per-SSID floor
      would cover? Compare the client's `signalDbm` to the backhaul's
      `backhaulRssiDbm`. If they are close (few dB) or the backhaul is weaker,
      **no floor value is safe** — it evicts the backhaul too (symptom: the
      mesh AP goes isolated/re-adopting). Remember a `both`-band SSID floor
      hits the mesh band even when the client and backhaul are on different
-     bands.
+     bands. When the graph reports `WIFI_MESH_UNRESOLVED` (the platform does not
+     say which node the mesh AP attaches to), you **cannot** establish a
+     collision — say so; do not assume one either way.
    - **Nowhere-to-roam:** is the serving AP plausibly the *closest* AP to the
      client (you can only infer this from RSSI — say so)? If no better AP
      exists, eviction just re-picks the same AP. There is no roaming fix.
@@ -560,12 +645,20 @@ tool, `name: interpreting-wifi-telemetry`):
 - **Never claim physical placement as fact.** Neither evidence nor the API has
   location ground truth. "Garage is the closest AP" is an *inference* from
   RSSI and/or the user — label it as such.
-- **Trust the stored uplink record over a UI screenshot.** The active mesh
-  backhaul band/parent comes from `controllerSummary.accessPoints[].uplink`
-  (`backhaulBand`, `parentName`); a dual 2.4/5 readout in the UI lists
-  candidates, not the live path. Never fall back to interface-name inference.
-  For backhaul *quality*, remember the units trap: `backhaulRssiDbm` is
-  SNR-like — the true dBm is the live `stat/device` `uplink.signal`.
+- **Trust the graph's uplink over the controller's, and the controller's over a
+  UI screenshot.** Whether an AP's backhaul is wired or wireless is settled by
+  the topology graph (`link_type=l2` vs a `MESH_BACKHAUL` hop), which reads the
+  switches' own LLDP/FDB; the controller's *wired* neighbor attribution is
+  inference and demonstrably wrong on third-party fabrics. The backhaul **band**
+  still comes from `controllerSummary.accessPoints[].uplink.backhaulBand`; a dual
+  2.4/5 readout in the UI lists candidates, not the live path. Never fall back to
+  interface-name inference. For backhaul *quality*, remember the units trap:
+  `backhaulRssiDbm` is SNR-like — the true dBm is the live `stat/device`
+  `uplink.signal`.
+- **Never fabricate a mesh parent.** If the graph reports
+  `WIFI_MESH_UNRESOLVED` / a `WiFi Mesh <group>` cloud, the platform genuinely
+  does not report which node the AP meshes to. Report the **medium** ("the
+  backhaul is wireless"), never a parent.
 - **State data gaps.** The diagnosis is based on **live VM** signal + retry rate
   (+ jitter). If the device was offline, say so and report VM's **last** points
   with the time they stop (when it went quiet) — do not substitute the frozen
