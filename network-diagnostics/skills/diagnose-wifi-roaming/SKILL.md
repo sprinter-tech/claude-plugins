@@ -60,7 +60,7 @@ the skill branches by platform. Three data sources, each for a different job:
   — which matters, because that inference demonstrably lies on sites with
   third-party switches (see the topology trap in Step 2a).
 - **The per-AP radios and the AP fleet roster come from evidence**
-  (`show_device` `wifiSnapshots.controllerSummary`). Sprinter's wifi service
+  (`show_device` `wifiSnapshots.controllerSummary`). Sprinter's infra service
   persists it on the discovery cadence; it is structural, so its staleness is
   fine. **Do not read the client's health *values* from evidence** — those
   scalars are frozen at the discovery cadence (a day old on real networks); read
@@ -75,10 +75,10 @@ the skill branches by platform. Three data sources, each for a different job:
   offline, so a flapping backhaul shows as a trend. Do NOT hit the controller API
   for it (issue #204 closed that gap).
 - **The live controller API** is touched only for **narrow residual facts** the
-  wifi service still does not store: the per-SSID min-RSSI *config* value.
+  infra service still does not store: the per-SSID min-RSSI *config* value.
   What to avoid is using the controller API as a **bulk data source**: do not GET
   it to obtain client rosters, per-client link health, or per-radio AP facts —
-  the wifi service already polls the controller for those and stores the
+  the infra service already polls the controller for those and stores the
   normalized result in VM (`sprinter_wifi_*` by device_id) and `show_device`
   evidence, so re-fetching them floods your context with raw JSON you already
   have. Rule of thumb: **read the processed data first; reach for the controller
@@ -723,7 +723,7 @@ prerequisite. We will wire placement into this skill only if and when such
 data becomes routinely available; until then, RSSI inference is the method.
 
 (Note: the live reads are intentionally narrow — per-SSID min-RSSI
-(`rest/wlanconf`) because it is config the wifi service does not snapshot,
+(`rest/wlanconf`) because it is config the infra service does not snapshot,
 and the mesh backhaul's true signal/rates (`stat/device`) because the
 evidence `backhaulRssiDbm` carries the SNR-like `uplink.rssi`, not dBm. The
 durable speed-up is the `MINRSSI_KEYS` candidate list above, which saves

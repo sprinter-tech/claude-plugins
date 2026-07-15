@@ -41,7 +41,7 @@ complaint is localized to a Wi-Fi client.
 
 ## Where the data lives — three tiers
 
-Sprinter's wifi service polls the network's WiFi controller (~every minute). The
+Sprinter's infra service polls the network's WiFi controller (~every minute). The
 same per-client readings land in **two** places on **two clocks**, and the skill
 must use the right one for the right job:
 
@@ -130,7 +130,7 @@ and still holds its last points (query them — see Step 3). With an empty
 health.
 
 If there is no association (or `wired: true`), the client is wired, offline, or
-on a platform the wifi service does not cover. Before concluding "no coverage,"
+on a platform the infra service does not cover. Before concluding "no coverage,"
 call `network_tech_stack` and read the platform note for this network's WiFi
 platform: it states plainly what that platform reports and what it withholds
 (e.g. Google Wifi exposes no client roster at all, so there is *no* per-client

@@ -12,11 +12,16 @@ allowed-tools: >
   mcp__sprinter__list_networks,
   mcp__sprinter__find_network,
   mcp__sprinter__show_network,
+  mcp__sprinter__network_tech_stack,
+  mcp__sprinter__find_device,
+  mcp__sprinter__show_device,
   mcp__sprinter__network_issues,
   mcp__sprinter__show_probes,
   mcp__sprinter__ask_user,
   mcp__sprinter__get_reference_doc,
-  mcp__sprinter__issue_chart
+  mcp__sprinter__issue_chart,
+  mcp__sprinter__timeseries_instant,
+  mcp__sprinter__timeseries_range
 ---
 
 > **Output discipline.** Investigate quietly. Do NOT narrate your process to the
@@ -32,17 +37,19 @@ Generate a network issues report for $ARGUMENTS
 ## Scope
 
 This report covers **network-level anomalies** detected by Sprinter's analytics
-(loss / latency / variance shifts from probes), DHCP config changes, and
-**cable-modem / DOCSIS** plant health. It does **not** cover per-client **Wi-Fi**
-link health: there is no `sprinter_wifi_*` anomaly stream here, and this skill
-has no `timeseries_*` tool to read those series or grade them against the WiFi
-catalog bands. If the user is really asking "is my wireless device's link OK?"
-(signal, SNR, retries, channel congestion), that is `Skill(diagnose-wifi-basic)`
-/ `Skill(diagnose-wifi-roaming)` — point them there rather than implying a WiFi
-finding from anomaly data. For the WiFi metric bands and grading reference, fetch
-it via the `get_reference_doc` MCP tool (`name: wifi-metrics-reference`). (Note:
-the `snr` / `signal` semantics in the DOCSIS section below are cable-plant MER,
-**not** 802.11.)
+(loss / latency / variance shifts from probes), DHCP config changes, and the
+health of the **WAN link itself** — the cable, fiber, cellular, or Starlink
+satellite connection the network reaches the internet through (Step 5b).
+
+It does **not** cover per-client **Wi-Fi** link health: there is no
+`sprinter_wifi_*` anomaly stream here. If the user is really asking "is my
+wireless device's link OK?" (signal, SNR, retries, channel congestion), that is
+`Skill(diagnose-wifi-basic)` / `Skill(diagnose-wifi-roaming)` — point them there
+rather than implying a WiFi finding from anomaly data.
+
+Note the WAN metrics are a *different layer* from Wi-Fi and the words collide:
+`docsis_ds_snr_db` is cable-plant MER on the coax, **not** 802.11 signal
+quality. Do not mix them in one verdict.
 
 ## MCP Server Availability — Check First
 
@@ -221,6 +228,71 @@ The response includes:
 calls.** Do not convert timestamps yourself.
 
 If the call fails, report the error and stop.
+
+## Step 5b: WAN Link Health (always run this)
+
+The anomaly stream tells you *that* the network misbehaved. The WAN metrics tell
+you *where* — inside the LAN, or out on the cable plant / fiber / cellular link.
+Run this **every time, even when zero anomalies fired**: a modem with a
+degrading upstream or climbing FEC errors is worth reporting whether or not the
+detector happened to notice, and a clean WAN link is what lets you say
+"the problem is inside the building" with confidence.
+
+1. **`network_tech_stack`** — read **Connection technology** (`cable` / `fiber` /
+   `cellular` / `dsl` / `unknown`) and the **internet gateway's `device_id`**.
+   Note **Starlink reports `unknown`** — its dish is a generic `modem` class, so
+   satellite is never named here; step 2's sweep is how you catch it.
+2. **If the technology is `unknown`, do NOT conclude "unsupported."** On the very
+   common **bridge-mode** topology — a standalone cable modem behind a consumer
+   router — `network_tech_stack` names the *router* as the gateway and reports
+   `unknown`, while the modem sits on its own IP (typically `192.168.100.1`)
+   emitting DOCSIS the whole time. **Starlink is the same shape**: the dish sits at
+   `192.168.100.1` streaming satellite telemetry while the Starlink *router* (a
+   `gateway` at `192.168.1.1`) is what the tech stack names. Sweep for the real
+   WAN device with `find_device(device_class=...)` over `cable_modem`,
+   `cable_gateway`, `fiber_ont`, `fiber_gateway`, `cellular_gateway`, and `modem`
+   (a `modem`-class hit with `vendor == "Starlink"` is the dish → satellite). A hit
+   gives you both the technology and the `device_id` to query. The reference doc
+   (next step) spells this out.
+3. **`get_reference_doc`** with `name: wan-metrics-reference`. Use **only** the
+   section for the technology you resolved. It lists every metric that technology
+   emits, its health bands, and the exact PromQL to run.
+4. **`timeseries_instant`** each metric in that section, substituting the **WAN
+   device's** `device_id` — in bridge mode that is the *modem*, not the device the
+   tech stack called the gateway. Use `timeseries_range` when you need to see
+   whether a value moved *during* the report window — that is what ties a WAN
+   fault to a user-visible incident.
+5. **Grade each value against its band** and report the **cause**, not the
+   number.
+
+**Do not hardcode metric names or thresholds in this skill.** They live in the
+catalog and reach you through the reference doc. (This section previously carried
+its own DOCSIS table; the catalog moved to per-channel, vendor-neutral names and
+the table silently rotted into describing metrics that no longer existed. Fetch,
+don't remember.)
+
+**Two-sided metrics: say which tail.** Some WAN metrics are bad in *both*
+directions, and the two tails are *different faults with opposite fixes*. A DOCSIS
+downstream at `+10 dBmV` is not "strong signal" — it is an **overdriven input**
+(remove an amplifier, check the tap), the opposite problem from a weak one (bad
+splitter, long run). The reference doc names what each tail means; use its words.
+Never report "the value is out of band" and stop there — that discards the half of
+the answer the operator needs.
+
+**Reporting the WAN verdict:**
+
+- Any WAN metric grading `poor` → **the problem is on the WAN side.** Name the
+  technology, the metric, the value, and the tail's cause. If LAN-side probes also
+  show issues, the WAN fault is very likely their cause — say so.
+- All WAN metrics `good`, but probes show loss/latency → **the WAN link is
+  healthy; the problem is inside the network.** This is a real, useful finding —
+  state it positively rather than omitting it.
+- WAN metrics missing → see the **When metrics are missing** table in the
+  reference doc, and follow it exactly. The distinction it draws matters: asking
+  for credentials is right for a cable modem and **wrong** for fiber/cellular/
+  Starlink (those rules use unauthenticated endpoints — the Starlink dish speaks
+  a credential-free local gRPC API — so missing metrics never mean "no
+  credentials").
 
 ## Step 6: Filter by Significance
 
@@ -567,65 +639,34 @@ Present as:
 > 192.168.10.2 (2 servers). Multiple DHCP servers can cause IP conflicts
 > and connectivity issues.
 
-#### Cable Modem / DOCSIS Metrics
+#### WAN Metrics (DOCSIS / optical / cellular / Starlink)
 
-Issues on a `pt_scripted` probe whose `metric` starts with `docsis_` come
-from the cable-modem monitoring rule (e.g. `cm2500_docsis_triage`). These
-metrics let the report distinguish **LAN-side** from **cable-side**
-(ISP / plant) problems. Treat them as first-class issues in the report and
-add a triage line that maps the observed metric to a likely cause.
+An issue on a `pt_scripted` probe whose `metric` is a WAN metric
+(`docsis_*`, `optical_*`, `pon_*`, `cellular_*`, `starlink_*`) comes from the WAN
+monitoring rule for the network's internet gateway or dish. Treat these as
+first-class issues.
 
-**Metric semantics and healthy ranges** (Netgear CM2500 and similar DOCSIS
-3.1 modems):
+**Do not grade them from memory — fetch the bands.** `get_reference_doc`
+(`name: wan-metrics-reference`) carries every WAN metric's meaning, its health
+band, and (for the two-sided ones) what each tail means. You will already have
+fetched it in Step 5b; reuse it.
 
-| Metric                           | Meaning                                 | Healthy band                     | Out-of-band implies                                |
-|----------------------------------|-----------------------------------------|----------------------------------|----------------------------------------------------|
-| `docsis_connectivity_ok`         | Modem overall connectivity state        | `1`                              | `0` -> modem offline (ISP / plant)                 |
-| `docsis_boot_ok`                 | Registered with CMTS                    | `1`                              | `0` -> registration failure                        |
-| `docsis_locked_channels_ratio`   | Fraction of DS + US channels locked     | `1.0`                            | `< 1.0` -> flapping bonding, partial service       |
-| `docsis_ds_power_dbmv_min`       | Min downstream RX power                 | `-7 … +7 dBmV`                   | `< -7` -> long run / too many splitters            |
-| `docsis_ds_power_dbmv_max`       | Max downstream RX power                 | `-7 … +7 dBmV`                   | `> +7` -> overdriven input / amplifier issue       |
-| `docsis_ds_snr_db_min`           | Min downstream SNR/MER                  | `? 33 dB` SC-QAM, `? 35 dB` OFDM | below -> noise ingress on plant                    |
-| `docsis_us_power_dbmv_max`       | Max upstream TX power                   | `35 … 51 dBmV`                   | `> 51` -> modem "shouting", return path attenuated |
-| `docsis_ds_uncorrectables_total` | Counter of uncorrectable codewords (DS) | rate flat                        | rising rate -> user-visible packet loss            |
+Narrate a WAN issue the same way as any other timeseries anomaly (baseline vs
+cluster stats from `details[]`), then append the **cause** from the reference
+doc's band — the tail's meaning, not just "out of band". Example:
 
-**Triage rules** — when narrating a DOCSIS issue, always append one of these
-conclusions to the narrative:
+> Upstream transmit power climbed from a baseline of 47.8 dBmV to a cluster mean
+> of 54.9 dBmV, peaking at 57.2 dBmV — into the `poor` band. The modem is
+> straining to be heard by the CMTS. **Likely cause: return-path attenuation** —
+> a bad connector, corroded splitter, or damaged drop cable between the house and
+> the tap.
 
-- `docsis_connectivity_ok == 0` or `docsis_boot_ok == 0` during the cluster
-  → **cable side (call ISP)** — modem could not reach or register with the
-  CMTS.
-- `docsis_locked_channels_ratio` dropped below `1.0` → **cable plant** —
-  one or more bonded channels lost lock (drop cable, splitter, ingress).
-- `docsis_ds_power_dbmv_min` / `_max` out of `−7…+7 dBmV`, or
-  `docsis_ds_snr_db_min` below threshold → **cable plant RF** — signal
-  level or noise floor on the coax is wrong.
-- `docsis_us_power_dbmv_max > 51 dBmV` → **return-path attenuation** —
-  modem is transmitting near the top of its range to be heard.
-- `docsis_ds_uncorrectables_total` increase (rising counter) → **cable
-  plant** — uncorrectable FEC errors translate directly to packet loss
-  that the user will feel as stalls, retransmits, or game lag.
-- None of the above, but LAN-side probes (ping, DNS, HTTP to local
-  targets) show issues → **LAN side** — DOCSIS layer is healthy; problem
-  is inside the home (Wi-Fi, router, switch, client device).
+**Ordering:** WAN issues co-occur (a plant problem trips SNR, uncorrectables, and
+channel lock together). Keep the API's `scoreOverall` ordering, but call it out in
+the Summary when several WAN metrics move together — that is far stronger evidence
+of a WAN-side fault than any single metric alone.
 
-**Narrative example** (for an `outlier_cluster` on `docsis_us_power_dbmv_max`):
-
-> Upstream transmit power climbed from a baseline of 44.2 dBmV (p95
-> 46.1 dBmV) to a cluster mean of 50.8 dBmV with peaks at 52.3 dBmV —
-> above the healthy 35–51 dBmV band. The modem is straining to be heard
-> by the CMTS. **Likely cable-side cause: return-path attenuation** (bad
-> connector, corroded splitter, or damaged drop cable between the house
-> and the tap).
-
-**Ordering within the report:** DOCSIS issues typically co-occur (e.g. a
-plant problem will trip ratio, SNR, and uncorrectables together). Keep the
-API's `scoreOverall` ordering, but call out in the Summary section if
-multiple DOCSIS metrics move together — that is stronger evidence of a
-cable-side problem than any single metric alone.
-
-**Charts:** DOCSIS issues have a `metric` field, so `issue_chart` works
-normally. Use the same pattern as other timeseries anomalies.
+**Charts:** WAN issues have a `metric`, so `issue_chart` works normally.
 
 **Scores:**
 

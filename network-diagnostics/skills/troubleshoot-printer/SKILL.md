@@ -90,6 +90,12 @@ all of them. Resolve in this order:
 1. If the prompt names the **printer** (a name, an IP/MAC, or a description) —
    call **`find_device`** for it, omitting `network_id` to search across every
    org. A single match resolves the `network_id` (and its `tenant` org) directly.
+   **But an IP does not identify a device.** Networks have overlapping IP ranges, so
+   an address search can legitimately return several *different* printers on different
+   networks — that is not a duplicate. Never pick one: `ask_user` showing
+   **network — vendor — model** (the address is identical in every row and
+   disambiguates nothing). See "An IP address is NOT a device identity" in the plugin
+   CLAUDE.md.
 2. Else if the prompt names a **network by name** — call **`find_network`** (name
    prefix, across all orgs). A single match resolves the `network_id`.
 3. Else — call **`list_networks`** (spans all orgs; each row carries `tenant_id` +

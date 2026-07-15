@@ -29,7 +29,9 @@ allowed-tools: >
   mcp__sprinter__network_dns_lookup,
   mcp__sprinter__network_speed_test,
   mcp__sprinter__network_jitter_test,
-  mcp__sprinter__network_traceroute
+  mcp__sprinter__network_traceroute,
+  mcp__sprinter__timeseries_instant,
+  mcp__sprinter__timeseries_range
 ---
 
 # Triage a Network Complaint
@@ -69,6 +71,23 @@ call `find_network` (name prefix, across all orgs). Otherwise fall back to
 `list_networks` (spans all orgs; rows carry `tenant_id` + `tenant_name`). If a name
 is ambiguous across **two orgs**, disambiguate by org via `ask_user`. Get
 `network_id` (the org/`tenant_id` follows from it).
+
+**An IP does not identify a device — `(network_id, address)` does.** Networks have
+overlapping IP ranges, so an address search can return several *different* devices on
+different networks. This bites hardest here, because triage gets pointed at exactly the
+addresses that collide: `.1` and `.254` gateways. In one fleet `192.168.1.254` is an AT&T
+gateway on **two** networks — same vendor, same name, different box. When an address
+matches more than one device, `ask_user` showing **network — vendor — product**; never
+pick one, and never treat a single match as proof of uniqueness. See "An IP address is NOT
+a device identity" in the plugin CLAUDE.md.
+
+**Correlating across networks (a multi-site tenant).** A tenant who owns several sites may
+reasonably ask a cross-network question — *"is the ISP flaky at all four offices?"*, *"did
+the same firmware break every location?"*. That is answerable, but **never correlate by IP**:
+two gateways both at `192.168.1.254` are unrelated boxes at unrelated sites. Correlate on
+`device_id`, `mac`, `serial_num`, or `vendor`+`product_name`, and label every finding with
+its **network** — an answer that says "the gateway is dropping packets" without saying
+*which site* is worse than no answer.
 
 **Hold onto the `network_id` and pass it into every network-scoped call for the
 rest of the session** — `network_tech_stack`, `show_network`, `network_ping`,
@@ -137,6 +156,49 @@ suspect:
   the last 24h, or pass an explicit window for "what happened last night".
 - **Upstream / ISP:** `isp_info` for the ASN, then `ioda` over the window for a
   known ISP/regional outage. Rules out "it's not us."
+- **The WAN link itself — the modem's own telemetry.** `ioda` tells you whether
+  the *ISP* is broken for everyone; this tells you whether **this** connection is
+  degraded, which is a far more common cause of "the internet is slow" and is
+  invisible to every other check here. It is a cheap, decisive read — do it on any
+  complaint that could be upstream (slow, buffering, drops, "works then stops").
+
+  You already have the **Connection technology** (`cable` / `fiber` / `cellular`)
+  and the gateway's `device_id` from `network_tech_stack`. Fetch
+  `get_reference_doc(name: "wan-metrics-reference")`, use **only** that
+  technology's section, and `timeseries_instant` its metrics against the WAN
+  device's `device_id`. Grade each against the band the doc gives.
+
+  **If the technology reads `unknown`, do not give up — look for the modem or
+  dish.** On the classic bridge-mode setup (a standalone cable modem behind a
+  consumer router) the "gateway" is the *router*, so the technology resolves to
+  `unknown` even though the modem is streaming DOCSIS from its own IP (usually
+  `192.168.100.1`). **Starlink lands here too**: its dish is a generic `modem`, so
+  the tech reads `unknown` while the dish streams satellite telemetry from
+  `192.168.100.1` and the Starlink *router* (`192.168.1.1`) is what got named.
+  Sweep `find_device(device_class=...)` over `cable_modem`, `cable_gateway`,
+  `fiber_ont`, `fiber_gateway`, `cellular_gateway`, and `modem` (a `modem`-class
+  hit with `vendor == "Starlink"` is the dish → satellite section); a hit gives
+  you the technology **and** the `device_id` that actually emits. Only if that
+  sweep comes back empty is the WAN genuinely unreadable.
+
+  Report the **cause**, not the number, and mind the **two-sided** metrics: a
+  DOCSIS downstream at `+10 dBmV` is an *overdriven input* (remove an amplifier),
+  not "strong signal" — the opposite fix from a weak one. The doc names what each
+  tail means; use its words.
+
+  How to read the result:
+  - Any WAN metric `poor` → **stop localizing inward.** The fault is on the cable
+    plant / fiber / cellular link. Report it with the cause and, for cable, that
+    it is an ISP/line issue the user should raise with their provider.
+  - All WAN metrics `good` → the WAN link is healthy. This is a **positive
+    finding**: it eliminates the entire upstream layer, so the problem is inside
+    the building (Wi-Fi, LAN, DNS, or the device). Say so — it is what lets the
+    rest of the triage be conclusive rather than a shrug.
+  - Metrics missing → follow the **When metrics are missing** table in the
+    reference doc. Do not ask a fiber, cellular, or Starlink customer for
+    credentials; those rules read unauthenticated endpoints (the Starlink dish
+    speaks a credential-free local gRPC API), so missing metrics never mean "no
+    credentials" there.
 - **Gateway / network basics:** `network_info` (gateway, addressing),
   `network_ping` the gateway and a public anchor (e.g. 1.1.1.1) for loss/RTT.
 - **DNS:** `network_dns_lookup` a couple of names — resolution failure or slow
@@ -168,16 +230,27 @@ From the above, decide where the problem lives. When a device was named, each
 layer here maps to a **hop on its `topology_path`** — walk the path outward and
 ask which hop the evidence indicts:
 
-| Signal                                                    | Layer            |
-|-----------------------------------------------------------|------------------|
-| `ioda`/`isp_info` shows upstream outage                   | ISP / WAN        |
-| Gateway ping bad, WAN side bad, LAN side fine             | Gateway / WAN    |
-| DNS lookups fail/slow, ping-by-IP fine                    | DNS              |
-| Speed test low but loss/latency fine                      | Throughput / WAN |
-| Only one device bad; others on same AP / switch port fine | That device      |
-| Wi-Fi client(s): weak signal / high retries / jitter      | Wi-Fi            |
-| A `MESH_BACKHAUL` hop on the path (wireless backhaul)     | Wi-Fi (mesh)     |
-| An infra hop on the path went `offline` at onset          | That infra hop   |
+| Signal                                                    | Layer                |
+|-----------------------------------------------------------|----------------------|
+| `ioda`/`isp_info` shows upstream outage                   | ISP (everyone)       |
+| **A WAN metric grades `poor`** (see below)                | **The WAN link**     |
+| **All WAN metrics `good`** — rules the whole layer OUT    | **Look inward**      |
+| Gateway ping bad, WAN side bad, LAN side fine             | Gateway / WAN        |
+| DNS lookups fail/slow, ping-by-IP fine                    | DNS                  |
+| Speed test low but loss/latency fine                      | Throughput / WAN     |
+| Only one device bad; others on same AP / switch port fine | That device          |
+| Wi-Fi client(s): weak signal / high retries / jitter      | Wi-Fi                |
+| A `MESH_BACKHAUL` hop on the path (wireless backhaul)     | Wi-Fi (mesh)         |
+| An infra hop on the path went `offline` at onset          | That infra hop       |
+
+The WAN row is the one that most often ends a triage early, and it cuts **both**
+ways. A `poor` DOCSIS upstream or a dark fiber explains "the internet is slow"
+completely — stop looking inward and report the line fault. Equally, an
+all-`good` WAN link *eliminates the entire upstream layer*, which is what turns
+the rest of the triage from guesswork into a narrowing search. Distinguish it
+from the `ioda` row: `ioda` says the **ISP** is down for everybody; the WAN
+metrics say **this specific line** is degraded, which is far more common and
+which no other check here can see.
 
 ## Step 4 — Dispatch
 

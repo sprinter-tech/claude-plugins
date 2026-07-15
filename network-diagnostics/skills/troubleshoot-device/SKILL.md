@@ -127,6 +127,26 @@ different orgs** — present the candidates **with the org** and ask via `ask_us
 (`org — network — device`; drop the device column when only networks are
 ambiguous). When the user belongs to only one org, org labels are unnecessary.
 
+**An IP address does not identify a device — `(network_id, address)` does.** Networks
+routinely have **overlapping IP ranges**, so an address search legitimately returns
+*several different devices* on different networks. That is not a duplicate and it is not
+a bug. It is most likely on exactly the addresses people troubleshoot: `192.168.1.254` is
+an AT&T gateway on **two** networks in one fleet — same vendor, same name, different box.
+
+So when the prompt gives an **IP or MAC** and `find_device` (searched across orgs) returns
+more than one match:
+
+- **Do not pick one.** Ask via `ask_user`, showing **network — vendor — product**, not
+  just the address; the address is identical in every row and disambiguates nothing.
+- **A single match is not proof of uniqueness** — it only means one network has been
+  discovered at that address so far. If the user's phrasing was network-neutral and the
+  device is a gateway-shaped address (`.1`, `.254`), say which network you resolved to,
+  so a wrong assumption surfaces immediately instead of silently steering the whole
+  investigation.
+
+Once resolved, **carry the `network_id` through every subsequent call.** Never re-resolve
+a device from the bare address mid-investigation.
+
 If the user did not mention a network, you can get the `network_id` from the
 `show_device` result in the next step (its result also carries the org).
 
