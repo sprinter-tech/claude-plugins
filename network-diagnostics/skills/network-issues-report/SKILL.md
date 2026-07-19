@@ -279,14 +279,50 @@ splitter, long run). The reference doc names what each tail means; use its words
 Never report "the value is out of band" and stop there — that discards the half of
 the answer the operator needs.
 
+**Before calling loss "upstream" — correlate the loss across LAN targets.**
+
+A packet-loss episode on the `ping_8_8_8_8` / first-hop probes tells you the
+agent lost the internet; it does **not** tell you *where* the fault was. The agent
+reaches the internet through the LAN (a wired or wireless hop to the gateway), so
+an **internal** fault — a broadcast/multicast storm, a switching loop, a gateway
+melting down, a duplex mismatch — shows up as WAN loss from the agent's vantage
+**even though the cause is inside the building.** Reporting it as a "one-off WAN
+event" then misses the real, recurring problem.
+
+Sprinter pings **every device on the network** from the agent (the multi-ping
+fleet probe), so the discriminating evidence already exists. During the loss
+window, query `sprinter_ping_loss_ratio` for the **LAN infrastructure** — the
+gateway/router, any switches (`device_class="network_switch"`), the Wi-Fi
+controller, and a couple of always-on internal hosts — and compare against the
+egress anchors:
+
+```
+# egress path (what you already looked at)
+sprinter_ping_loss_ratio{probe_id="<ping_8_8_8_8 probe>"}
+# LAN — was the storm internal? one series per internal device_id
+max_over_time(sprinter_ping_loss_ratio{device_id=~"<gateway|switch|internal hosts>"}[5m])
+```
+
+Read the pattern, and **say which one you found**:
+
+- **Loss on the WAN anchors only, LAN clean** → a genuine upstream/WAN event.
+  Now "one-off, upstream of your problem" is a supported conclusion.
+- **Loss on LAN infra too (gateway + internal hosts)** → the fault is **inside the
+  network**, and the internet loss is a *symptom* seen from the agent's vantage,
+  not the cause. Broadcast storm, switch loop, or gateway failure — a storm
+  typically hits many internal targets at once and elevates their RTT/jitter as
+  well. This is a materially different diagnosis; report it as internal even when
+  the triggering complaint is something else.
+
 **Reporting the WAN verdict:**
 
 - Any WAN metric grading `poor` → **the problem is on the WAN side.** Name the
   technology, the metric, the value, and the tail's cause. If LAN-side probes also
   show issues, the WAN fault is very likely their cause — say so.
 - All WAN metrics `good`, but probes show loss/latency → **the WAN link is
-  healthy; the problem is inside the network.** This is a real, useful finding —
-  state it positively rather than omitting it.
+  healthy; the problem is inside the network.** Do the LAN-wide correlation above
+  to localize it — network-wide LAN loss points at a storm/loop, not the WAN.
+  This is a real, useful finding — state it positively rather than omitting it.
 - WAN metrics missing → see the **When metrics are missing** table in the
   reference doc, and follow it exactly. The distinction it draws matters: asking
   for credentials is right for a cable modem and **wrong** for fiber/cellular/
@@ -638,6 +674,17 @@ Present as:
 > **Multiple DHCP servers detected** at 2:30 PM: 192.168.10.1,
 > 192.168.10.2 (2 servers). Multiple DHCP servers can cause IP conflicts
 > and connectivity issues.
+
+**Beyond these three events, the DHCP server has a health/performance axis.** The
+events above are config-drift and rogue-appeared detections; they say nothing about
+whether the server is *answering* or *how fast*. Sprinter runs an active DORA probe
+that emits `sprinter_dhcp_*` metrics (DORA timing, ack/offer/timeout/nack counters,
+`num_responses`). If a `dhcp_*` event fired — or a client-connectivity complaint
+points at DHCP — confirm the live state with those metrics: `show_probes` for the
+`pt_dhcp` `probe_id`, then `get_reference_doc(name: "dhcp-metrics-reference")` and
+`timeseries_range`. Climbing `dhcp_timeouts_total` with flat `dhcp_acks_seen_total`
+is a server-down finding the event stream alone will not give you. **These series
+are labeled `probe_id` / `dhcp_server`, not `device_id`.**
 
 #### WAN Metrics (DOCSIS / optical / cellular / Starlink)
 

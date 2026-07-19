@@ -37,6 +37,8 @@ allowed-tools: >
   mcp__sprinter__topology_neighbors,
   mcp__sprinter__topology_path,
   mcp__sprinter__show_probes,
+  mcp__sprinter__timeseries_instant,
+  mcp__sprinter__timeseries_range,
   mcp__sprinter__network_issues,
   mcp__sprinter__issue_chart,
   mcp__sprinter__network_info,
@@ -413,6 +415,19 @@ source. The full recipe is in the `when-did-this-start` reference (fetch via the
    event's `dhcp_server_ip`) if it is not already the gateway, and `isp_info` /
    `ioda` for the upstream ISP's health.
 
+   **When the device's symptom is "no IP" / "can't connect" / "connects then
+   drops", check DHCP-server health directly** — a client failing to get or renew
+   a lease looks like a dead device while its link is fine. Sprinter runs an active
+   DORA probe, so this is a read, not a guess: get the `pt_dhcp` probe's `probe_id`
+   from `show_probes(network_id=<net>)`, fetch
+   `get_reference_doc(name: "dhcp-metrics-reference")`, and grade with
+   `timeseries_instant` / `timeseries_range`. `rate(sprinter_dhcp_timeouts_total…)`
+   climbing with flat `sprinter_dhcp_acks_seen_total` = server down; offers without
+   acks = pool exhaustion; `sprinter_dhcp_num_responses >= 2` = a rogue/second
+   server (a classic cause of intermittent drops). **These metrics are labeled
+   `probe_id` / `dhcp_server`, never `device_id`** — querying by the device's id
+   returns empty and misreads as "down". See the reference doc.
+
    If `topology_path` reports `found: false`, read its `status`/`reason` — an
    `UNPLACED` device with `ARP_NO_MATCH` is itself a finding — then fall back to
    the hand-assembled set above.
@@ -430,11 +445,36 @@ source. The full recipe is in the `when-did-this-start` reference (fetch via the
    an extender whose backhaul flipped from wired (`link_type=l2`) to wireless
    (`link_type=wifi`) at ≈ `T`, *is* the onset — and nothing else in this sweep
    would reveal it.
+
+   **If the sweep surfaced a packet-loss episode on the internet anchors
+   (`ping_8_8_8_8` / the first hop), do NOT label it a WAN event yet — correlate
+   the loss across LAN targets first.** The agent reaches the internet *through*
+   the LAN, so an internal fault (a broadcast/multicast storm, a switching loop, a
+   gateway melting down) shows up as internet loss from the agent's vantage even
+   though the cause is inside the building. Sprinter pings **every device on the
+   network** from the agent (the multi-ping fleet probe), so the evidence to tell
+   these apart already exists: over the loss window, query `sprinter_ping_loss_ratio`
+   for the LAN infra — the gateway, switches (`device_class="network_switch"`), the
+   Wi-Fi controller, and a couple of always-on internal hosts — and compare against
+   the egress anchors.
+
+   ```
+   max_over_time(sprinter_ping_loss_ratio{device_id=~"<gateway|switch|internal hosts>"}[5m])
+   ```
+
+   - Loss on the WAN anchors only, LAN clean → a genuine upstream/WAN event.
+   - Loss on LAN infra too (many internal targets at once, often with elevated
+     RTT/jitter) → the fault is **inside the network**; the internet loss is a
+     symptom, not the cause. Report it as an internal storm/loop/gateway event,
+     even if it is not the recurring problem you were sent to find.
 4. **Report a timeline and read it honestly.** A co-occurring event on a
    dependency is a *candidate* cause, not proof — state it as a correlation. A
    **clean** sweep is also a finding: "nothing changed on the gateway, the
    serving AP, or the path in ±15 min around onset → this is device-local."
-   Don't mistake a collection gap at `T` for an onset.
+   Don't mistake a collection gap at `T` for an onset. **And never call an internet
+   loss episode "a one-off WAN event, upstream of your problem" without the LAN
+   correlation above** — network-wide LAN loss during the same window means it was
+   internal, and reporting it as upstream buries the real finding.
 
 ## Step 6: Present Findings
 

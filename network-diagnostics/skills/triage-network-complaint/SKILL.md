@@ -10,6 +10,7 @@ description: >
 argument-hint: "[network-id-or-name] [optional: affected device]"
 allowed-tools: >
   Bash, Read, Skill,
+  mcp__sprinter__ask_user,
   mcp__sprinter__get_reference_doc,
   mcp__sprinter__show_network,
   mcp__sprinter__list_networks,
@@ -30,6 +31,7 @@ allowed-tools: >
   mcp__sprinter__network_speed_test,
   mcp__sprinter__network_jitter_test,
   mcp__sprinter__network_traceroute,
+  mcp__sprinter__show_probes,
   mcp__sprinter__timeseries_instant,
   mcp__sprinter__timeseries_range
 ---
@@ -49,6 +51,27 @@ mean a download-speed drop, DNS failures, intermittent dead spells, one bad
 device, or an ISP outage. This skill's job is **localization, not deep
 diagnosis** — narrow the vague report to a layer, then hand off. It is
 **read-only**.
+
+> **Do not guess to fill a vacuum. This is the single most important rule here.**
+> When the instruments cannot see the failing path, or the broad checks all come
+> back clean, the correct next move is **not** to manufacture a plausible root
+> cause — it is to **stop and either report the blind spot or ask the user one
+> concrete question.** A confident wrong diagnosis is worse than an honest "I
+> can't see this from here, and here is what would settle it," because the user
+> acts on it. The two failure modes to refuse:
+>
+> - **Hypothesis inflation.** Producing a ranked shortlist of causes *none of
+>   which you can distinguish from your vantage point*, then defending it. If you
+>   cannot measure which item on the list is true, the list is a guess dressed as
+>   analysis — say you cannot tell them apart, do not present them as findings.
+> - **Vantage blindness.** Reading a number without asking *where it was measured
+>   from*. A probe from a wired agent says nothing about a Wi-Fi client's path
+>   (see the **coverage gate**, Step 1.5). A single stuck/canned value (identical
+>   to the millisecond across runs) is a measurement artifact, not a signal.
+>
+> When you are about to write "it's probably X" and you have no measurement that
+> singles out X, that sentence is the trigger to invoke the **Ask the user**
+> discipline (Step 1.5) or to report the blind spot honestly instead.
 
 No working-directory check needed (no repo writes). It dispatches to other
 skills, which run their own checks.
@@ -97,6 +120,88 @@ automatically between tool calls; treat it as a variable you thread explicitly.
 `show_device` and `find_device` echo the `network_id` in their results, so if you
 ever lose it, read it back from the last such result rather than dropping the
 argument.
+
+## Step 1.5 — Coverage gate + ask, don't guess
+
+Before you localize, answer one question about **yourself**: *can Sprinter
+actually observe the path the user is complaining about?* The scratch-real
+failure this skill exists to prevent was diagnosing a **Wi-Fi client's**
+intermittent failure from a **wired agent** on a **Google Nest** network — a path
+that is **structurally invisible** to Sprinter here — and then inventing an
+"IPv6 cold-start" root cause from a stuck ping value measured on the wrong side of
+the link. Do the coverage check *first*, so a blind spot is named as a blind spot
+and not filled with a guess.
+
+**A. Run the coverage check (cheap, from data you already fetch in Step 2).**
+Establish the observability of the failing path:
+
+- **Agent vantage.** `show_network`'s agent roster: how many agents, and are any
+  on the **same segment as the complaint**? An intermittent **Wi-Fi** complaint
+  when the only agent is **wired to the router** means *no probe you run touches
+  the failing path* — a wired-agent ping/traceroute/HTTP measures the router's
+  uplink, not the client's Wi-Fi. Say that out loud in the verdict; never present
+  a wired-vantage measurement as evidence about a wireless client.
+- **Platform telemetry.** From `network_tech_stack`'s per-platform notes: does the
+  WiFi platform expose **per-client** data at all? **Google Wifi / Nest exposes no
+  client roster or per-client link telemetry** — so for a single-client Wi-Fi
+  complaint on Nest there is **nothing to read**, by design. An empty Wi-Fi column
+  here is a **structural limit**, not a fault and not something to keep probing.
+
+**B. If the failing path IS observable, investigate normally** (Step 2 onward) and
+report from the data. The gate only diverts you when you are blind.
+
+**C. If the failing path is NOT observable — OR your Step 2 broad checks all come
+back clean — do NOT start hypothesizing. Ask the user ONE concrete question**
+(`ask_user`) to narrow the complaint into something you *can* act on, or to
+confirm the symptom shape. Pick the one question whose answer most changes the
+next step. Rules for the question:
+
+- **Offer coarse estimate buckets, and always an explicit "I don't know / not
+  sure" choice.** End users often genuinely don't know the specifics, and a
+  question with no escape hatch pushes them to invent an answer — which is just
+  *their* guess replacing yours. A good `ask_user` for frequency:
+  - `A few times an hour`
+  - `A few times a day`
+  - `Once every few days`
+  - `Only after the Mac wakes from sleep / reconnects`
+  - `Not sure / I don't know`
+- **Ask about things the user can actually observe**, not internal state:
+  *how often*, *all sites or only some*, *one device or several*, *always after
+  sleep/reconnect*, *does a wired device on the same network have the problem
+  too*. The last one is gold on a blind Wi-Fi network — a wired device that is
+  clean while the Mac fails localizes to Wi-Fi without any Sprinter Wi-Fi
+  telemetry at all.
+- **One question, not an interrogation.** This is triage, not a form. If the first
+  answer resolves the ambiguity, proceed; only ask a second if it still changes
+  the layer.
+
+**D. If the path is unobservable AND the user cannot add detail, stop guessing and
+close honestly.** Do not emit a ranked shortlist of causes you cannot tell apart.
+Instead:
+
+1. **Name the blind spot and why it exists** — "Sprinter can't see the Wi-Fi path
+   on this network: the only agent is wired to the router, and Google Nest reports
+   no per-client Wi-Fi telemetry, so no probe I can run touches the failing link."
+2. **State the positive findings you CAN stand behind** — the layers you *did*
+   clear (wired path clean on v4/v6, WAN link healthy, DHCP DORA_OK, no rogue
+   server, no presence flapping). These are real and they eliminate whole layers;
+   that is a genuine result, not a shrug.
+3. **Hand the user concrete client-side capture steps to run during a failure,
+   before the workaround** (e.g. before toggling Wi-Fi), each labelled with how to
+   read it. For a MacBook:
+   ```
+   ping -c5 192.168.86.1                 # gateway reachable over Wi-Fi?
+   ping -c5 8.8.8.8                      # IPv4 to internet
+   ping6 -c5 2001:4860:4860::8888        # IPv6 to internet
+   dig +short example.com                # DNS resolving?
+   ```
+   Tell them what each split means (only `ping6` fails → IPv6-over-Wi-Fi path;
+   gateway ping shows loss → Wi-Fi link/roaming; DNS fails but pings fine → DNS).
+   These are **bisection tests the user runs**, framed as "here's how to catch it,"
+   not a root cause you claim to have found.
+
+The discipline in one line: **measure what you can, ask about what you can't, and
+never let a gap in coverage become a guess in the report.**
 
 ## Step 2 — Broad instruments first (cheap, in parallel)
 
@@ -156,6 +261,20 @@ suspect:
   the last 24h, or pass an explicit window for "what happened last night".
 - **Upstream / ISP:** `isp_info` for the ASN, then `ioda` over the window for a
   known ISP/regional outage. Rules out "it's not us."
+- **A packet-loss episode? Correlate it across LAN targets before blaming
+  upstream.** Loss on the internet anchors (`ping_8_8_8_8` / the first hop) proves
+  the agent lost the internet, not *where* the fault was. The agent reaches the
+  internet through the LAN, so an internal fault — a broadcast/multicast storm, a
+  switching loop, a gateway melting down — shows up as internet loss from the
+  agent's vantage while the cause is inside the building. Sprinter pings **every
+  device on the network** from the agent (the multi-ping fleet probe), so the
+  discriminating evidence already exists: over the loss window, `timeseries_range`
+  on `sprinter_ping_loss_ratio` for the LAN infra (gateway, switches
+  `device_class="network_switch"`, the Wi-Fi controller, a couple of always-on
+  internal hosts) and compare to the anchors. **Loss on WAN anchors only, LAN
+  clean → a real upstream event. Loss on LAN infra too (many internal targets at
+  once, elevated RTT/jitter) → the fault is inside the network** and the internet
+  loss is a symptom, not the cause — do not report it as "a one-off WAN event."
 - **The WAN link itself — the modem's own telemetry.** `ioda` tells you whether
   the *ISP* is broken for everyone; this tells you whether **this** connection is
   degraded, which is a far more common cause of "the internet is slow" and is
@@ -199,6 +318,34 @@ suspect:
     credentials; those rules read unauthenticated endpoints (the Starlink dish
     speaks a credential-free local gRPC API), so missing metrics never mean "no
     credentials" there.
+- **DHCP server health (when the complaint is "can't connect" / "no IP" /
+  "connects then drops"):** a client that cannot get or renew a lease looks
+  exactly like a dead network, but the WAN and Wi-Fi links can be perfectly
+  healthy. Sprinter runs an active DORA probe, so this is a direct read, not an
+  inference. Get the DHCP probe's `probe_id` from `show_probes(network_id=<net>)`
+  (the `pt_dhcp` probe), fetch `get_reference_doc(name: "dhcp-metrics-reference")`,
+  and grade its metrics with `timeseries_instant` / `timeseries_range`. The three
+  reads that decide it: `rate(sprinter_dhcp_timeouts_total[15m])` (server not
+  answering), `rate(sprinter_dhcp_acks_seen_total[15m])` vs
+  `rate(sprinter_dhcp_offers_seen_total[15m])` (offers-without-acks = pool
+  exhaustion, a distinct fault from "down"), and `sprinter_dhcp_num_responses`
+  (`>= 2` → a rogue/second server, which causes exactly the intermittent
+  wrong-gateway breakage users describe as "sometimes it works").
+
+  How to read the result:
+  - Timeouts climbing, acks flat → **DHCP server down / unreachable.** Report it;
+    the fault is the server, not the link.
+  - Offers flowing but acks flat (often with NAKs) → **pool exhaustion / lease
+    refusal.** Different remediation (widen the scope / free addresses), so do not
+    collapse it into "down".
+  - `num_responses >= 2` → **a second DHCP server is answering.** Cross-check with
+    the `dhcp_new_server_seen` / `dhcp_multiple_servers_seen` events in
+    `network_issues`; this is a prime cause of intermittent connectivity.
+  - All healthy (acks flowing, DORA fast, one responder) → **DHCP is fine**, a
+    positive finding that eliminates the layer. If metrics are missing, follow the
+    reference doc's **When metrics are missing** table — the usual cause is the
+    wrong label (`device_id` instead of `probe_id`) or no DHCP probe on the
+    network, not a dead server.
 - **Gateway / network basics:** `network_info` (gateway, addressing),
   `network_ping` the gateway and a public anchor (e.g. 1.1.1.1) for loss/RTT.
 - **DNS:** `network_dns_lookup` a couple of names — resolution failure or slow
@@ -274,6 +421,12 @@ which no other check here can see.
 - **ISP/WAN, gateway, DNS, throughput:** no specialist skill exists yet —
   report the localized finding and the evidence directly. These are good
   candidates for future triage→specialist funnels; note that to the user.
+- **Nothing localized — the failing path was unobservable (coverage gate, Step
+  1.5) or every broad check came back clean:** do NOT invent a layer to blame.
+  Close per Step 1.5-D — name the blind spot, list the layers you cleared, and
+  hand the user the client-side capture steps. "I couldn't reproduce or localize
+  it from here, and here's exactly how to catch it next time" is a complete,
+  honest triage outcome.
 
 ## Step 5 — "When did this start?" before you hand off
 
@@ -323,3 +476,12 @@ starts from it.
 - If the broad checks come back clean, say so — "no current network-level issue
   detected in the window; if it was intermittent, give me a tighter time range"
   — rather than inventing a cause.
+- **Vantage before value.** For every measurement you cite, be sure it was taken
+  from a point that can *see* the failing path. A wired-agent probe is silent on a
+  Wi-Fi client's link; a stuck value identical across runs is an artifact. If your
+  only numbers come from the wrong vantage, you have no evidence — say so.
+- **A blind spot is a finding, not a failure.** "Sprinter cannot observe this path
+  from here (why), but these layers are clean, and here's how to catch it" is a
+  legitimate and *complete* answer. Prefer it over any root cause you cannot
+  measure. Never publish a ranked list of indistinguishable causes as if it were a
+  diagnosis.

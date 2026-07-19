@@ -12,6 +12,7 @@ description: >
 argument-hint: "[device-address-or-id]"
 allowed-tools: >
   Bash, Read, Skill,
+  mcp__sprinter__ask_user,
   mcp__sprinter__get_reference_doc,
   mcp__sprinter__network_tech_stack,
   mcp__sprinter__show_device,
@@ -143,6 +144,31 @@ available** points anyway (the last value is the last measured health; its
 timestamp dates roughly when it dropped off the air). A live `network_ping`
 corroborates the current symptom. Only a genuinely unknown/uncovered platform is
 a true stop.
+
+> **When the platform gives no per-client Wi-Fi telemetry (e.g. Google Wifi /
+> Nest): STOP — do not guess, ask or report the blind spot.** This is the exact
+> trap this skill exists to avoid. With no per-client series and (commonly) only a
+> wired agent, **no probe you can run touches the client's Wi-Fi link** — so you
+> have *nothing* that distinguishes IPv6-over-Wi-Fi from DNS from a sticky client.
+> Do **not** manufacture a ranked shortlist of causes and defend it; a list of
+> hypotheses you cannot tell apart is a guess, not a diagnosis. Instead:
+>
+> - **Ask the user one concrete question** (`ask_user`) that narrows the symptom
+>   into something observable — always with coarse estimate buckets **and** an
+>   explicit "Not sure / I don't know" choice so a user who genuinely doesn't know
+>   isn't pushed to invent an answer. High-value asks on a blind Wi-Fi network:
+>   *how often* (a few times an hour / a few times a day / once every few days /
+>   only after wake-from-sleep / not sure), *all sites or only some*, *one device
+>   or several*, and especially **does a wired device on the same network hit the
+>   problem too** — a clean wired device while the Mac fails localizes to Wi-Fi
+>   with zero Sprinter Wi-Fi telemetry.
+> - **Report the blind spot honestly and hand over client-side capture steps.**
+>   Name why Sprinter can't see it (wired-only agent, no per-client Nest
+>   telemetry), state the layers you *did* clear, and give the user the
+>   run-during-a-failure bisection (`ping` gateway / `ping 8.8.8.8` /
+>   `ping6` internet / `dig`) framed as "here's how to catch it," not a root cause.
+>   Full recipe lives in `triage-network-complaint` Step 1.5-D; hand back there if
+>   this skill was reached from triage.
 
 ### Step 2 — Look up the platform's metric set (generated reference)
 
