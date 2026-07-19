@@ -261,19 +261,24 @@ suspect:
   the last 24h, or pass an explicit window for "what happened last night".
 - **Upstream / ISP:** `isp_info` for the ASN, then `ioda` over the window for a
   known ISP/regional outage. Rules out "it's not us."
-- **A packet-loss episode? Correlate it across LAN targets before blaming
-  upstream.** Loss on the internet anchors (`ping_8_8_8_8` / the first hop) proves
-  the agent lost the internet, not *where* the fault was. The agent reaches the
-  internet through the LAN, so an internal fault — a broadcast/multicast storm, a
-  switching loop, a gateway melting down — shows up as internet loss from the
-  agent's vantage while the cause is inside the building. Sprinter pings **every
-  device on the network** from the agent (the multi-ping fleet probe), so the
-  discriminating evidence already exists: over the loss window, `timeseries_range`
-  on `sprinter_ping_loss_ratio` for the LAN infra (gateway, switches
-  `device_class="network_switch"`, the Wi-Fi controller, a couple of always-on
-  internal hosts) and compare to the anchors. **Loss on WAN anchors only, LAN
-  clean → a real upstream event. Loss on LAN infra too (many internal targets at
-  once, elevated RTT/jitter) → the fault is inside the network** and the internet
+- **A packet-loss episode? Check for a `lan_wide_connectivity_loss` issue first —
+  it IS the LAN-vs-WAN verdict, already computed.** Loss on the internet anchors
+  (`ping_8_8_8_8` / the first hop) proves the agent lost the internet, not *where*
+  the fault was. The agent reaches the internet through the LAN, so an internal
+  fault — a broadcast/multicast storm, a switching loop, a gateway melting down —
+  shows up as internet loss from the agent's vantage while the cause is inside the
+  building. Sprinter pings **every device on the network** from the agent (the
+  multi-ping fleet probe, `pt_multi_ping`) and the insights pipeline correlates it:
+  when a large fraction of the fleet is lossy in the same window it fires a
+  **`lan_wide_connectivity_loss`** issue (`probeType = pt_multi_ping`). If your
+  `network_issues` fetch already returned one for the loss window, the answer is
+  **internal fault, not upstream** — use it and skip the manual query. Only when no
+  such issue fired, fall back to the manual correlation: over the loss window,
+  `timeseries_range` on `sprinter_ping_loss_ratio` for the LAN infra (gateway,
+  switches `device_class="network_switch"`, the Wi-Fi controller, a couple of
+  always-on internal hosts) and compare to the anchors. **Loss on WAN anchors only,
+  LAN clean → a real upstream event. Loss on LAN infra too (many internal targets
+  at once, elevated RTT/jitter) → the fault is inside the network** and the internet
   loss is a symptom, not the cause — do not report it as "a one-off WAN event."
 - **The WAN link itself — the modem's own telemetry.** `ioda` tells you whether
   the *ISP* is broken for everyone; this tells you whether **this** connection is

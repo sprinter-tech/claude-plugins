@@ -289,10 +289,17 @@ melting down, a duplex mismatch — shows up as WAN loss from the agent's vantag
 **even though the cause is inside the building.** Reporting it as a "one-off WAN
 event" then misses the real, recurring problem.
 
-Sprinter pings **every device on the network** from the agent (the multi-ping
-fleet probe), so the discriminating evidence already exists. During the loss
-window, query `sprinter_ping_loss_ratio` for the **LAN infrastructure** — the
-gateway/router, any switches (`device_class="network_switch"`), the Wi-Fi
+**First, check whether Sprinter already answered this.** The multi-ping fleet probe
+(`pt_multi_ping`) pings every device on the network and the insights pipeline
+correlates the result: a **`lan_wide_connectivity_loss`** issue in your Step 5 fetch
+IS the LAN-vs-WAN verdict, already computed (see its narration section below). If one
+is present for the loss window, **use it** — the loss was internal, and you can skip
+the manual query below. Only fall back to the manual correlation when no such issue
+fired (e.g. the storm was below the fleet-fraction threshold, or the probe is not
+running on this network).
+
+Manual fallback: query `sprinter_ping_loss_ratio` for the **LAN infrastructure** —
+the gateway/router, any switches (`device_class="network_switch"`), the Wi-Fi
 controller, and a couple of always-on internal hosts — and compare against the
 egress anchors:
 
@@ -674,6 +681,47 @@ Present as:
 > **Multiple DHCP servers detected** at 2:30 PM: 192.168.10.1,
 > 192.168.10.2 (2 servers). Multiple DHCP servers can cause IP conflicts
 > and connectivity issues.
+
+#### LAN-Wide Connectivity Loss (`lan_wide_connectivity_loss`)
+
+This is the **highest-value connectivity verdict the report can carry**, and it is
+the automated answer to "was the loss internal or upstream?" — the question Step 5b
+otherwise makes you derive by hand. `probeType = pt_multi_ping`, `metric` empty, and
+it is an **interval** issue (a real `start`/`end`, not an instant): Sprinter pings
+*every* device on the network from the agent, and this issue fires when a large
+fraction of the fleet went lossy **in the same window**. Simultaneous loss across
+many internal devices is the signature of an **internal** fault — a broadcast/
+multicast storm, a switching loop, a gateway meltdown — NOT an upstream/WAN event.
+
+Parse `details[]` for:
+
+- `lan_wide_peak_fraction` — the largest share of the pinged fleet lossy at once
+  (0..1). `0.89` means ~89% of devices were losing packets simultaneously.
+- `lan_wide_affected_count` / `lan_wide_fleet_size` — devices lossy at the peak vs
+  devices pinged (e.g. `34` of `38`).
+- `lan_wide_duration_sec` — how long the episode lasted.
+- `lan_wide_affected_device_ids` — comma-separated device_ids to pivot into with
+  `show_device` if you want to name the affected devices.
+- `lan_wide_gateway_affected` / `lan_wide_wan_anchor_affected` — present (`true`)
+  only when the gateway, or a WAN anchor like the `8.8.8.8` ping target, was also in
+  the lossy set. `wan_anchor_affected=true` is the tell that WAN loss **coincided
+  with** LAN-wide loss (so the internet outage was a *symptom* of the internal
+  fault), not a standalone WAN event.
+
+Present as a network-scoped verdict, not a single-device chart:
+
+> **LAN-wide connectivity loss** from 1:52 PM to 2:16 PM (24 min): at the peak, 34
+> of 38 pinged devices were losing packets simultaneously (89% of the fleet). Loss
+> hitting this many internal devices at once points at an **internal** fault — a
+> broadcast/multicast storm, a switching loop, or a failing gateway — not an
+> upstream/ISP event. The gateway was among the affected devices.
+
+**When this issue is present, it OVERRIDES the manual LAN-vs-WAN correlation in
+Step 5b** — the conclusion is already stated. Do NOT then present a coincident
+`pt_ping` loss on `ping_8_8_8_8` as a separate "one-off WAN event": it is the same
+storm seen from the egress vantage. Lead with the storm; treat the per-anchor ping
+issues as corroboration. **Do not call `issue_chart` for this issue** — it is
+network-scoped with no single metric series to plot.
 
 **Beyond these three events, the DHCP server has a health/performance axis.** The
 events above are config-drift and rogue-appeared detections; they say nothing about
